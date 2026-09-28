@@ -1,0 +1,78 @@
+import { choice, score } from "@typesafe-ai/sdk";
+
+// Scene questions tell the shader *where* colours go. They ride along in the
+// same Jev call as the palette questions, so they cost almost no latency.
+
+export const COMPOSITIONS = {
+  horizon: "A landscape split into sky above and ground below, like a sunset, beach, desert or field",
+  centre: "One subject in the middle surrounded by space, like a jellyfish, an eye, a flower or the moon",
+  vertical: "Tall vertical elements side by side, like a forest, a city skyline, a waterfall or rain",
+  field: "An even all-over pattern with no focal point, like camouflage, confetti, static or a crowd",
+};
+
+export const LIGHT_POSITIONS = {
+  top: "Overhead, from above",
+  "upper-left": "From the upper left",
+  "upper-right": "From the upper right",
+  horizon: "Low on the horizon, like a rising or setting sun",
+  centre: "From the middle; the subject itself glows",
+  bottom: "From below, like firelight or lava",
+  none: "No distinct light source",
+};
+
+export const HORIZON_LEVELS = [
+  "Very low; the scene is mostly sky",
+  "Low",
+  "In the middle",
+  "High",
+  "Very high; the scene is mostly ground",
+];
+
+export const GLOW_LEVELS = [
+  "No visible light or glow",
+  "Soft, diffuse light",
+  "A clear, bright light source",
+  "Blazing, radiant, blinding light",
+];
+
+export function sceneQuestions(colourCriteria) {
+  return {
+    background: choice(
+      "Which colour is the background of a scene depicting `subject`: the sky, the far distance, or the space around it?",
+      colourCriteria,
+    ),
+    foreground: choice(
+      "Which colour is the foreground of a scene depicting `subject`: the ground, the nearest things, or the main subject itself?",
+      colourCriteria,
+    ),
+    light: choice("Which colour is the brightest light or glow in a scene depicting `subject`?", colourCriteria),
+    lightPos: choice("Where does the light come from in a scene depicting `subject`?", LIGHT_POSITIONS),
+    composition: choice("How is a scene depicting `subject` composed?", COMPOSITIONS),
+    horizon: score("Where does the horizon or dividing line sit in a scene depicting `subject`?", HORIZON_LEVELS),
+    glow: score("How strong is the light in a scene depicting `subject`?", GLOW_LEVELS),
+  };
+}
+
+export function sceneFromAnswers(answers) {
+  return {
+    background: answers.background.choice,
+    foreground: answers.foreground.choice,
+    light: answers.light.choice,
+    lightPos: answers.lightPos.probabilities,
+    composition: answers.composition.probabilities,
+    horizon: answers.horizon.score / (HORIZON_LEVELS.length - 1),
+    glow: answers.glow.score / (GLOW_LEVELS.length - 1),
+  };
+}
+
+// Used when a backend has no scene questions (the Claude fallback). A field
+// composition with no light renders exactly like the pre-scene shader.
+export const DEFAULT_SCENE = {
+  background: "white",
+  foreground: "black",
+  light: "white",
+  lightPos: { none: 1 },
+  composition: { field: 1 },
+  horizon: 0.5,
+  glow: 0,
+};
