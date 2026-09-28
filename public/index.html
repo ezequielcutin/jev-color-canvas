@@ -2,25 +2,40 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>Colour Canvas</title>
   <style>
     * { box-sizing: border-box; margin: 0; }
-    html, body { height: 100%; }
+    html {
+      height: 100%;
+      background: #fff;
+      -webkit-text-size-adjust: 100%;
+    }
     body {
+      position: fixed;
+      top: var(--vv-top, 0px);
+      left: var(--vv-left, 0px);
+      width: var(--vv-width, 100%);
+      height: var(--vv-height, 100dvh);
       background: #fff;
       color: #000;
       font-family: ui-monospace, "SF Mono", Menlo, monospace;
       overflow: hidden;
+      touch-action: manipulation;
+      overscroll-behavior: none;
     }
 
     /* ---- shared input ---- */
     .top {
-      position: fixed;
+      position: absolute;
       inset: 0 0 50% 0;
       display: grid;
       place-items: center;
-      padding: 0 16px;
+      padding:
+        0
+        max(16px, env(safe-area-inset-right))
+        0
+        max(16px, env(safe-area-inset-left));
       z-index: 2;
       pointer-events: none;
     }
@@ -49,7 +64,7 @@
 
     /* ---- stripes mode (the original replica) ---- */
     .stripes {
-      position: fixed;
+      position: absolute;
       inset: 50% 0 0 0;
       display: flex;
       overflow: hidden;
@@ -61,7 +76,7 @@
     }
 
     /* ---- shader mode ---- */
-    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: none; }
+    canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
     body.shader canvas { display: block; }
     body.shader .stripes { display: none; }
     body.shader .top { inset: 0 0 auto 0; height: 38%; color: #fff; }
@@ -74,11 +89,26 @@
     }
     body.shader input { border-bottom-color: rgba(255, 255, 255, 0.6); }
     body.shader .status { right: 28px; }
+    /* A short phone, or one with the keyboard up, has no room to centre
+       the field in the top band. Sit it under the mode button instead. */
+    @media (max-height: 560px) {
+      body.shader .top {
+        height: auto;
+        place-items: start center;
+        padding-top: calc(max(12px, env(safe-area-inset-top)) + 60px);
+      }
+    }
+    html.short body.shader .top {
+      height: auto;
+      place-items: start center;
+      padding-top: calc(max(12px, env(safe-area-inset-top)) + 60px);
+    }
 
     .hud {
-      position: fixed;
-      left: 16px;
-      bottom: 16px;
+      position: absolute;
+      left: max(12px, env(safe-area-inset-left));
+      bottom: max(12px, env(safe-area-inset-bottom));
+      max-width: calc(100% - 24px - env(safe-area-inset-left) - env(safe-area-inset-right));
       z-index: 2;
       font-size: 11px;
       line-height: 1.6;
@@ -94,9 +124,9 @@
     body.shader .hud { display: block; }
 
     .toggle {
-      position: fixed;
-      top: 16px;
-      right: 16px;
+      position: absolute;
+      top: max(12px, env(safe-area-inset-top));
+      right: max(12px, env(safe-area-inset-right));
       z-index: 3;
       font: inherit;
       font-size: 12px;
@@ -106,6 +136,13 @@
       background: transparent;
       color: #000;
       cursor: pointer;
+    }
+    @media (pointer: coarse) {
+      .toggle {
+        min-height: 44px;
+        padding: 10px 16px;
+      }
+      input { padding: 12px 0; }
     }
     body.shader .toggle {
       color: #fff;
@@ -119,7 +156,7 @@
   <canvas id="gl"></canvas>
   <div class="top">
     <div class="field">
-      <input id="q" value="tomato" autocomplete="off" spellcheck="false" autofocus />
+      <input id="q" value="tomato" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" />
       <div class="status" id="status">thinking…</div>
     </div>
   </div>
@@ -130,6 +167,24 @@
   <script type="module">
     import { PALETTE, ORDER } from "/palette.mjs";
     import { horizonY, lightPosition, lightStrength, compositionVector } from "/scene-uniforms.mjs";
+
+    // Keep the picture inside the area that is actually visible. On a phone
+    // that is the space above the keyboard and below the browser chrome.
+    function fitVisible() {
+      const vv = window.visualViewport;
+      if (!vv) return;
+      const s = document.documentElement.style;
+      s.setProperty("--vv-top", `${vv.offsetTop}px`);
+      s.setProperty("--vv-left", `${vv.offsetLeft}px`);
+      s.setProperty("--vv-width", `${vv.width}px`);
+      s.setProperty("--vv-height", `${vv.height}px`);
+      document.documentElement.classList.toggle("short", vv.height <= 560);
+    }
+    if (window.visualViewport) {
+      visualViewport.addEventListener("resize", fitVisible);
+      visualViewport.addEventListener("scroll", fitVisible);
+      fitVisible();
+    }
 
     const input = document.getElementById("q");
     const stripesEl = document.getElementById("stripes");
@@ -740,7 +795,8 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       if (e.key === "Enter") { clearTimeout(timer); query(input.value); }
     });
 
-    input.select();
+    // A phone keyboard would cover the picture if the field took focus on load.
+    if (matchMedia("(hover: hover) and (pointer: fine)").matches) input.select();
     query(input.value);
   </script>
 </body>
