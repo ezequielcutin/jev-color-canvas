@@ -1,57 +1,84 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import { TypeSafeClient, choice } from "@typesafe-ai/sdk";
+import { TypeSafeClient, choice, score } from "@typesafe-ai/sdk";
 import { PALETTE, COLOR_NAMES } from "./palette.mjs";
 
-// Each backend returns raw { name: weight } for a query; server.mjs normalises.
+// Each backend's analyze(text) returns
+//   { weights: { name: w }, motion?: { energy, texture }, form?: { name: p }, confidence? }
+// server.mjs normalises weights and fills defaults for anything missing.
 
-const NOUL_FLOOR = 0.2;
+export const FORMS = {
+  liquid: "Flowing, fluid, wavy, melting",
+  organic: "Rounded blobs, cells, ripples, natural growth",
+  geometric: "Hard edges, grids, crystalline, architectural",
+  glitch: "Digital, broken, pixelated, scanlines",
+};
 
-// Jev, two ways to read a palette out of it (JEV_MODE):
-//  - "choice": one Choice question; colours compete, so the distribution is
-//    peaky (tomato ≈ all red). Likely what the reference demo does.
-//  - "noul": one yes/no question per colour, run in parallel in the same call.
-//    Colours don't compete, so secondary colours (the tomato's stem) survive.
-export function jevBackend(mode = "choice") {
+// How the three colour questions blend into one palette.
+const ROLE_WEIGHTS = { main: 0.6, accent: 0.25, shadow: 0.15 };
+
+const ENERGY_LEVELS = [
+  "Still, silent, motionless",
+  "Calm, slow drifting",
+  "Moderate, steady movement",
+  "Lively, bouncy, active",
+  "Frantic, chaotic, explosive",
+];
+const TEXTURE_LEVELS = [
+  "Perfectly smooth, glossy, clean",
+  "Soft, matte",
+  "Slightly rough, papery",
+  "Gritty, grainy, noisy",
+];
+
+// Jev: every question runs in parallel in one call, so the motion questions
+// are nearly free. A single Choice is accurate but peaky (ocean = 100% blue),
+// so three colour roles are blended to give the palette some depth.
+export function jevBackend() {
   const client = new TypeSafeClient();
-  const describe = (n) => `${n} (${PALETTE[n]})`;
+  const criteria = Object.fromEntries(COLOR_NAMES.map((n) => [n, `${n} (${PALETTE[n]})`]));
 
-  const questions =
-    mode === "noul"
-      ? Object.fromEntries(
-          COLOR_NAMES.map((n) => [
-            n,
-            {
-              type: "noul",
-              instructions: `Would a designer include ${describe(n)} in a colour palette for \`subject\`?`,
-            },
-          ]),
-        )
-      : {
-          colour: choice(
-            "Which colour from the palette does `subject` most evoke?",
-            Object.fromEntries(COLOR_NAMES.map((n) => [n, describe(n)])),
-          ),
-        };
+  const questions = {
+    main: choice("Which single colour from the palette does `subject` most evoke?", criteria),
+    accent: choice(
+      "Which colour from the palette is the accent or secondary colour of `subject`, not its main colour?",
+      criteria,
+    ),
+    shadow: choice(
+      "Which colour from the palette fills the shadows, background, or darkest areas of `subject`?",
+      criteria,
+    ),
+    energy: score("How much energy or motion does `subject` evoke?", ENERGY_LEVELS),
+    texture: score("What surface texture does `subject` evoke?", TEXTURE_LEVELS),
+    form: choice("What kind of shapes or motion best fit `subject`?", FORMS),
+  };
 
   return {
-    name: `jev (${mode})`,
-    async weigh(text) {
+    name: "jev",
+    async analyze(text) {
       const { answers } = await client.systemOne({ state: { subject: text }, questions });
-      if (mode === "noul") {
-        // Every colour gets some small P(yes); drop the clear "no"s so they
-        // don't all render as slivers. Tune against real outputs.
-        return Object.fromEntries(
-          COLOR_NAMES.map((n) => [n, answers[n].noul]).filter(([, p]) => p >= NOUL_FLOOR),
-        );
+
+      const weights = {};
+      for (const [role, share] of Object.entries(ROLE_WEIGHTS)) {
+        for (const [name, p] of Object.entries(answers[role].probabilities)) {
+          weights[name] = (weights[name] ?? 0) + p * share;
+        }
       }
-      return answers.colour.probabilities;
+      return {
+        weights,
+        motion: {
+          energy: answers.energy.score / (ENERGY_LEVELS.length - 1),
+          texture: answers.texture.score / (TEXTURE_LEVELS.length - 1),
+        },
+        form: answers.form.probabilities,
+        confidence: answers.main.confidence,
+      };
     },
   };
 }
 
-// Claude: approximates the same distribution with structured output.
+// Claude: approximates the palette with structured output; motion uses defaults.
 export function claudeBackend(model = "claude-opus-5") {
   const client = new Anthropic();
   const Schema = z.object({
@@ -65,7 +92,7 @@ Return the colours that a designer would associate with the input, each with a w
 
   return {
     name: `claude (${model})`,
-    async weigh(text) {
+    async analyze(text) {
       const response = await client.messages.parse({
         model,
         max_tokens: 2048,
@@ -80,7 +107,7 @@ Return the colours that a designer would associate with the input, each with a w
       for (const { name, weight } of response.parsed_output.colors) {
         weights[name] = (weights[name] ?? 0) + weight;
       }
-      return weights;
+      return { weights };
     },
   };
 }

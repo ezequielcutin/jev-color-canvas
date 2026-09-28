@@ -1,20 +1,23 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { PALETTE } from "./palette.mjs";
-import { jevBackend, claudeBackend } from "./backends.mjs";
+import { jevBackend, claudeBackend, FORMS } from "./backends.mjs";
 
 const PORT = Number(process.env.PORT ?? 5173);
 // BACKEND=jev|claude; defaults to Jev when a TypeSafe key is present.
 const BACKEND = process.env.BACKEND ?? (process.env.TYPESAFE_API_KEY ? "jev" : "claude");
-const backend = BACKEND === "jev" ? jevBackend(process.env.JEV_MODE) : claudeBackend(process.env.MODEL);
+const backend = BACKEND === "jev" ? jevBackend() : claudeBackend(process.env.MODEL);
+
+const DEFAULT_MOTION = { energy: 0.4, texture: 0.25 };
+const DEFAULT_FORM = { liquid: 1 };
 
 const cache = new Map();
 
-async function paletteFor(text) {
+async function analyze(text) {
   const key = text.trim().toLowerCase();
   if (cache.has(key)) return cache.get(key);
 
-  const weights = await backend.weigh(key);
+  const { weights, motion, form, confidence } = await backend.analyze(key);
 
   // Drop non-positive weights, normalise, sort dominant-first.
   const entries = Object.entries(weights).filter(([name, w]) => w > 0 && name in PALETTE);
@@ -23,8 +26,14 @@ async function paletteFor(text) {
     .map(([name, w]) => ({ name, hex: PALETTE[name], weight: w / total }))
     .sort((a, b) => b.weight - a.weight);
 
-  cache.set(key, colors);
-  return colors;
+  const result = {
+    colors,
+    motion: { ...DEFAULT_MOTION, ...motion },
+    form: Object.fromEntries(Object.keys(FORMS).map((f) => [f, (form ?? DEFAULT_FORM)[f] ?? 0])),
+    confidence: confidence ?? 0.8,
+  };
+  cache.set(key, result);
+  return result;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -36,6 +45,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/palette.mjs") {
+    res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
+    res.end(await readFile(new URL("./palette.mjs", import.meta.url)));
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/palette") {
     const q = (url.searchParams.get("q") ?? "").slice(0, 200);
     if (!q.trim()) {
@@ -44,10 +59,10 @@ const server = http.createServer(async (req, res) => {
     }
     const started = performance.now();
     try {
-      const colors = await paletteFor(q);
+      const result = await analyze(q);
       const ms = Math.round(performance.now() - started);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ q, colors, ms }));
+      res.end(JSON.stringify({ q, ms, ...result }));
     } catch (err) {
       console.error(`[palette] "${q}":`, err.message);
       res.writeHead(err.status ?? 502, { "content-type": "application/json" });
