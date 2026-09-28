@@ -1,6 +1,7 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { PALETTE } from "./palette.mjs";
+import { DEFAULT_SCENE } from "./scene.mjs";
 import { jevBackend, claudeBackend, FORMS } from "./backends.mjs";
 
 const PORT = Number(process.env.PORT ?? 5173);
@@ -10,6 +11,9 @@ const backend = BACKEND === "jev" ? jevBackend() : claudeBackend(process.env.MOD
 
 const DEFAULT_MOTION = { energy: 0.4, texture: 0.25 };
 const DEFAULT_FORM = { liquid: 1 };
+// Pure modules the page imports directly. Whitelisted so the server never
+// serves arbitrary files (like .env) from disk.
+const BROWSER_MODULES = new Set(["/palette.mjs", "/scene-uniforms.mjs"]);
 
 const cache = new Map();
 
@@ -17,7 +21,7 @@ async function analyze(text) {
   const key = text.trim().toLowerCase();
   if (cache.has(key)) return cache.get(key);
 
-  const { weights, motion, form, confidence } = await backend.analyze(key);
+  const { weights, motion, form, confidence, scene } = await backend.analyze(key);
 
   // Drop non-positive weights, normalise, sort dominant-first.
   const entries = Object.entries(weights).filter(([name, w]) => w > 0 && name in PALETTE);
@@ -31,6 +35,7 @@ async function analyze(text) {
     motion: { ...DEFAULT_MOTION, ...motion },
     form: Object.fromEntries(Object.keys(FORMS).map((f) => [f, (form ?? DEFAULT_FORM)[f] ?? 0])),
     confidence: confidence ?? 0.8,
+    scene: scene ?? DEFAULT_SCENE,
   };
   cache.set(key, result);
   return result;
@@ -45,9 +50,17 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "GET" && url.pathname === "/palette.mjs") {
+  if (req.method === "GET" && BROWSER_MODULES.has(url.pathname)) {
+    let source;
+    try {
+      source = await readFile(new URL(`.${url.pathname}`, import.meta.url));
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+      res.writeHead(404).end();
+      return;
+    }
     res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
-    res.end(await readFile(new URL("./palette.mjs", import.meta.url)));
+    res.end(source);
     return;
   }
 

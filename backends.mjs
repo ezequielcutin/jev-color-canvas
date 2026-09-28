@@ -3,6 +3,7 @@ import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { TypeSafeClient, choice, score } from "@typesafe-ai/sdk";
 import { PALETTE, COLOR_NAMES } from "./palette.mjs";
+import { sceneQuestions, sceneFromAnswers } from "./scene.mjs";
 
 // Each backend's analyze(text) returns
 //   { weights: { name: w }, motion?: { energy, texture }, form?: { name: p }, confidence? }
@@ -52,6 +53,7 @@ export function jevBackend() {
     energy: score("How much energy or motion does `subject` evoke?", ENERGY_LEVELS),
     texture: score("What surface texture does `subject` evoke?", TEXTURE_LEVELS),
     form: choice("What kind of shapes or motion best fit `subject`?", FORMS),
+    ...sceneQuestions(criteria),
   };
 
   return {
@@ -73,6 +75,7 @@ export function jevBackend() {
         },
         form: answers.form.probabilities,
         confidence: answers.main.confidence,
+        scene: sceneFromAnswers(answers),
       };
     },
   };
