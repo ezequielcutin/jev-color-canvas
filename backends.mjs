@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { TypeSafeClient, choice, score } from "@typesafe-ai/sdk";
-import { PALETTE, COLOR_NAMES } from "./palette.mjs";
+import { COLOR_NAMES, colourCriteria } from "./palette.mjs";
 import { sceneQuestions, sceneFromAnswers } from "./scene.mjs";
 
 // Each backend's analyze(text) returns
@@ -18,6 +18,28 @@ export const FORMS = {
 
 // How the three colour questions blend into one palette.
 const ROLE_WEIGHTS = { main: 0.6, accent: 0.25, shadow: 0.15 };
+
+// A 64-way choice spreads leftover probability across near-cousins (navy,
+// blue, cobalt, indigo). Keep the leader and anything at least half as
+// likely, then renormalise, so a real split survives and a tail does not.
+export function sharpenProbabilities(probabilities) {
+  const entries = Object.entries(probabilities).filter(([, p]) => p > 0);
+  if (entries.length === 0) return {};
+  const top = Math.max(...entries.map(([, p]) => p));
+  const kept = entries.filter(([, p]) => p * 2 >= top);
+  const sum = kept.reduce((s, [, p]) => s + p, 0);
+  return Object.fromEntries(kept.map(([name, p]) => [name, p / sum]));
+}
+
+export function blendRoleWeights(answers) {
+  const weights = {};
+  for (const [role, share] of Object.entries(ROLE_WEIGHTS)) {
+    for (const [name, p] of Object.entries(sharpenProbabilities(answers[role].probabilities))) {
+      weights[name] = (weights[name] ?? 0) + p * share;
+    }
+  }
+  return weights;
+}
 
 const ENERGY_LEVELS = [
   "Still, silent, motionless",
@@ -38,16 +60,19 @@ const TEXTURE_LEVELS = [
 // so three colour roles are blended to give the palette some depth.
 export function jevBackend() {
   const client = new TypeSafeClient();
-  const criteria = Object.fromEntries(COLOR_NAMES.map((n) => [n, `${n} (${PALETTE[n]})`]));
+  const criteria = colourCriteria();
 
   const questions = {
-    main: choice("Which single colour from the palette does `subject` most evoke?", criteria),
+    main: choice(
+      "Which single swatch does `subject` most evoke? Match the gloss in parentheses, not merely the most familiar colour name.",
+      criteria,
+    ),
     accent: choice(
-      "Which colour from the palette is the accent or secondary colour of `subject`, not its main colour?",
+      "Which swatch is the accent or secondary colour of `subject`, not its main colour? Match the gloss in parentheses.",
       criteria,
     ),
     shadow: choice(
-      "Which colour from the palette fills the shadows, background, or darkest areas of `subject`?",
+      "Which swatch fills the shadows or darkest areas of `subject`? Match the gloss in parentheses.",
       criteria,
     ),
     energy: score("How much energy or motion does `subject` evoke?", ENERGY_LEVELS),
@@ -61,14 +86,8 @@ export function jevBackend() {
     async analyze(text) {
       const { answers } = await client.systemOne({ state: { subject: text }, questions });
 
-      const weights = {};
-      for (const [role, share] of Object.entries(ROLE_WEIGHTS)) {
-        for (const [name, p] of Object.entries(answers[role].probabilities)) {
-          weights[name] = (weights[name] ?? 0) + p * share;
-        }
-      }
       return {
-        weights,
+        weights: blendRoleWeights(answers),
         motion: {
           energy: answers.energy.score / (ENERGY_LEVELS.length - 1),
           texture: answers.texture.score / (TEXTURE_LEVELS.length - 1),
@@ -87,11 +106,11 @@ export function claudeBackend(model = "claude-opus-5") {
   const Schema = z.object({
     colors: z.array(z.object({ name: z.enum(COLOR_NAMES), weight: z.number() })),
   });
-  const system = `You map any word or phrase to a colour distribution over a fixed 16-colour palette.
+  const system = `You map any word or phrase to a colour distribution over a fixed palette of named colours.
 
-Palette: ${COLOR_NAMES.map((n) => `${n} (${PALETTE[n]})`).join(", ")}.
+Palette: ${COLOR_NAMES.map((n) => colourCriteria()[n]).join(", ")}.
 
-Return the colours that a designer would associate with the input, each with a weight proportional to how much of the "visual area" it should take. Think about the actual thing: "tomato" is mostly red with a sliver of green stem; "browser" might evoke the logos and UI chrome of popular browsers; "80s" is pinks, purples, cyans. Use 1-10 colours, dominant first. Weights are relative (they will be normalised). Include small accent colours when they genuinely belong. Use each name at most once.`;
+Return the colours that a designer would associate with the input, each with a weight proportional to how much of the visual area it should take. Think about the actual thing: "tomato" is mostly red with a sliver of green stem; "Wes Anderson" is dusty pastels such as blush, mustard, cream and sage; "Miami" is hot-pink, aqua and navy. Prefer the specific name when two colours sit in the same family. Use 2-8 colours, dominant first. Weights are relative (they will be normalised). Include small accent colours when they genuinely belong. Use each name at most once.`;
 
   return {
     name: `claude (${model})`,
