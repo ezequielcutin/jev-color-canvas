@@ -10,6 +10,8 @@ const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "publ
 const CONTENT_TYPES = new Map([
   [".html", "text/html; charset=utf-8"],
   [".mjs", "text/javascript; charset=utf-8"],
+  [".svg", "image/svg+xml"],
+  [".png", "image/png"],
 ]);
 
 // Only files inside public/. Rejects ../ escapes so .env and server code stay unserved.
@@ -53,5 +55,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`colour canvas on http://localhost:${PORT} (backend: ${backendName()})`);
+  console.log(`color canvas on http://localhost:${PORT} (backend: ${backendName()})`);
 });
