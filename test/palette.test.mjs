@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ORDER, PALETTE, GLOSS, COLOR_NAMES, colourCriteria } from "../palette.mjs";
+import { ORDER, PALETTE, GLOSS, COLOR_NAMES, colourCriteria } from "../public/palette.mjs";
 
 const ORIGINAL = {
   black: "#000000",

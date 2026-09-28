@@ -2,12 +2,12 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { TypeSafeClient, choice, score } from "@typesafe-ai/sdk";
-import { COLOR_NAMES, colourCriteria } from "./palette.mjs";
+import { COLOR_NAMES, colourCriteria } from "./public/palette.mjs";
 import { sceneQuestions, sceneFromAnswers } from "./scene.mjs";
 
 // Each backend's analyze(text) returns
 //   { weights: { name: w }, motion?: { energy, texture }, form?: { name: p }, confidence? }
-// server.mjs normalises weights and fills defaults for anything missing.
+// analyze.mjs normalises weights and fills defaults for anything missing.
 
 export const FORMS = {
   liquid: "Flowing, fluid, wavy, melting",

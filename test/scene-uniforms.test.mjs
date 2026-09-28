@@ -7,7 +7,7 @@ import {
   lightPosition,
   lightStrength,
   compositionVector,
-} from "../scene-uniforms.mjs";
+} from "../public/scene-uniforms.mjs";
 
 const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} !== ${b}`);
 

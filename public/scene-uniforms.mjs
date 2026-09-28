@@ -1,5 +1,5 @@
 // Turns a Jev scene into numbers the shader uses. Pure, so it runs in the
-// browser (served by server.mjs) and in Node tests.
+// browser (served from public/) and in Node tests.
 //
 // Positions are in the shader's p-space: y from -0.5 (bottom) to 0.5 (top),
 // x from about -0.9 to 0.9 on a 16:9 screen.
