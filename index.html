@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Colour Canvas</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; }
+    html, body { height: 100%; }
+    body {
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      background: #fff;
+      color: #000;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    .top {
+      display: grid;
+      place-items: center;
+      padding: 0 16px;
+    }
+    .field { position: relative; width: min(640px, 100%); }
+    input {
+      width: 100%;
+      border: 0;
+      border-bottom: 1.5px solid #000;
+      padding: 8px 0;
+      font: inherit;
+      font-size: clamp(18px, 3vw, 28px);
+      text-align: center;
+      background: transparent;
+      outline: none;
+    }
+    .status {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 8px);
+      font-size: 12px;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .status.on { opacity: 0.45; }
+    .stripes { display: flex; overflow: hidden; }
+    .stripe {
+      flex-basis: 0;
+      transition: flex-grow 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.6s;
+      min-width: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div class="field">
+      <input id="q" value="tomato" autocomplete="off" spellcheck="false" autofocus />
+      <div class="status" id="status">thinking…</div>
+    </div>
+  </div>
+  <div class="stripes" id="stripes"></div>
+
+  <script type="module">
+    const input = document.getElementById("q");
+    const stripesEl = document.getElementById("stripes");
+    const statusEl = document.getElementById("status");
+
+    // One persistent element per palette name, so a colour that survives
+    // between queries animates its width instead of popping.
+    const stripeEls = new Map();
+
+    function render(colors) {
+      const seen = new Set();
+      colors.forEach(({ name, hex, weight }, i) => {
+        let el = stripeEls.get(name);
+        if (!el) {
+          el = document.createElement("div");
+          el.className = "stripe";
+          el.style.flexGrow = "0";
+          el.style.backgroundColor = hex;
+          stripeEls.set(name, el);
+          stripesEl.appendChild(el);
+          el.getBoundingClientRect(); // commit the 0 width so it grows in
+        }
+        el.style.order = String(i);
+        el.style.flexGrow = String(weight);
+        el.title = `${name} ${(weight * 100).toFixed(0)}%`;
+        seen.add(name);
+      });
+      for (const [name, el] of stripeEls) {
+        if (!seen.has(name)) el.style.flexGrow = "0";
+      }
+    }
+
+    let controller;
+    let timer;
+
+    async function query(text) {
+      controller?.abort();
+      if (!text.trim()) return;
+      controller = new AbortController();
+      statusEl.classList.add("on");
+      try {
+        const res = await fetch(`/api/palette?q=${encodeURIComponent(text)}`, { signal: controller.signal });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? res.status);
+        if (data.q === input.value) render(data.colors);
+      } catch (err) {
+        if (err.name !== "AbortError") console.error(err);
+      } finally {
+        if (input.value === text) statusEl.classList.remove("on");
+      }
+    }
+
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => query(input.value), 150);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { clearTimeout(timer); query(input.value); }
+    });
+
+    input.select();
+    query(input.value);
+  </script>
+</body>
+</html>
