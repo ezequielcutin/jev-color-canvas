@@ -42,7 +42,7 @@ export function sceneQuestions(colourCriteria) {
       colourCriteria,
     ),
     foreground: choice(
-      "Which colour is the foreground of a scene depicting `subject`: the ground, the nearest things, or the main subject itself?",
+      "Which colour depicts the foreground in a scene depicting `subject`? For landscapes, choose the ground or dark silhouettes below the sky. For a single central subject, choose its visible body colour contrasted with the surrounding space; for translucent luminous creatures, choose the pale body rather than the surrounding water.",
       colourCriteria,
     ),
     light: choice("Which colour is the brightest light or glow in a scene depicting `subject`?", colourCriteria),
