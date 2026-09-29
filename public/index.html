@@ -302,6 +302,10 @@
       white-space: pre;
     }
     body.shader .hud { display: block; }
+    /* The readout is for tuning Jev with a cursor. A finger gets the picture. */
+    @media (hover: none) and (pointer: coarse) {
+      body.shader .hud { display: none; }
+    }
 
     .toggle {
       position: absolute;
