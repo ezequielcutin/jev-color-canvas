@@ -408,6 +408,66 @@
       bottom: calc(100% + 10px);
     }
     body.shader.keyboard .hud { display: none; }
+
+    /* Once the scene is up and the keyboard is down, the word steps aside.
+       It sits at the bottom of the visible area: small type, palette line. */
+    body.caption .top,
+    html.short body.caption .top,
+    html.short body.shader.caption .top,
+    body.shader.caption .top {
+      inset: auto 0 0 0;
+      height: auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      align-items: center;
+      padding:
+        0
+        max(20px, env(safe-area-inset-right))
+        max(18px, env(safe-area-inset-bottom))
+        max(20px, env(safe-area-inset-left));
+    }
+    body.caption .hint,
+    body.caption .status { display: none; }
+    body.caption .field,
+    body.shader.caption .field,
+    body.shader.caption .field:focus-within {
+      --pad: 0px;
+      --line-bottom: 0px;
+      width: max-content;
+      max-width: 100%;
+      min-width: 0;
+      padding: 10px 6px 8px;
+      border-radius: 0;
+      background: transparent;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      box-shadow: none;
+    }
+    body.caption input {
+      width: auto;
+      max-width: 100%;
+      field-sizing: content;
+      font-size: 16px;
+      text-align: center;
+      padding: 4px 0 8px;
+    }
+    body.shader.caption input {
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+    }
+    body.caption:not(.shader) input {
+      text-shadow: 0 1px 2px rgba(255, 255, 255, 0.9);
+    }
+    body.caption .line,
+    body.caption .field:not(:focus-within) .line {
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: auto;
+      height: 2px;
+      opacity: 1;
+      transition: none;
+    }
   </style>
 </head>
 <body class="shader">
@@ -1232,6 +1292,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         beginHandoff(data);
       }
       nudgeBars();
+      syncCaption();
     }
 
     let shader = null;
@@ -1394,6 +1455,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         if (mix >= 1) {
           phase = "ready";
           heldIsTex = false;
+          syncCaption();
         }
       }
 
@@ -1584,13 +1646,27 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       trayEl.hidden = !open;
       input.placeholder = open ? HINTS[0] : " ";
     }
-    input.addEventListener("focus", syncKeyboard);
+    // The picture keeps the screen. The word waits at the bottom until tapped.
+    function syncCaption() {
+      const phone = matchMedia("(hover: none) and (pointer: coarse)").matches;
+      const focused = document.activeElement === input;
+      const show = phone && !focused && phase !== "idle" && input.value.trim().length > 0;
+      document.body.classList.toggle("caption", show);
+    }
+    input.addEventListener("focus", () => {
+      syncKeyboard();
+      syncCaption();
+    });
     input.addEventListener("blur", () => {
       syncKeyboard();
+      syncCaption();
       settleBleed();
       nudgeBars();
     });
-    matchMedia("(hover: none) and (pointer: coarse)").addEventListener("change", syncKeyboard);
+    matchMedia("(hover: none) and (pointer: coarse)").addEventListener("change", () => {
+      syncKeyboard();
+      syncCaption();
+    });
     let hintIndex = 0;
     const showHint = () => {
       hintEl.textContent = HINTS[hintIndex % HINTS.length];
