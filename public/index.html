@@ -269,8 +269,10 @@ uniform vec3 u_bg2H;       // runner-up background / foreground colours
 uniform vec3 u_bg2N;
 uniform vec3 u_fg2H;
 uniform vec3 u_fg2N;
-uniform vec2 u_ambH;       // runner-up share of the background, foreground
-uniform vec2 u_ambN;
+uniform vec3 u_light2H;    // runner-up light colour
+uniform vec3 u_light2N;
+uniform vec3 u_ambH;       // runner-up share of the background, foreground, light
+uniform vec3 u_ambN;
 uniform vec3 u_lightH;
 uniform vec3 u_lightN;
 uniform vec2 u_lightPosH;
@@ -370,7 +372,8 @@ vec3 paint(int set, vec2 uv, vec2 p, float t) {
   vec3 fg = set == 0 ? u_fgH : u_fgN;
   vec3 bg2 = set == 0 ? u_bg2H : u_bg2N;
   vec3 fg2 = set == 0 ? u_fg2H : u_fg2N;
-  vec2 amb = set == 0 ? u_ambH : u_ambN;
+  vec3 amb = set == 0 ? u_ambH : u_ambN;
+  vec3 light2 = set == 0 ? u_light2H : u_light2N;
   vec3 light = set == 0 ? u_lightH : u_lightN;
   vec2 lightPos = set == 0 ? u_lightPosH : u_lightPosN;
   float glow = set == 0 ? u_glowH : u_glowN;
@@ -446,7 +449,10 @@ vec3 paint(int set, vec2 uv, vec2 p, float t) {
   // Light: a tight core plus a wide bloom, added in linear light.
   vec2 dl = p - lightPos;
   float r2 = dot(dl, dl);
-  col += toLinear(light) * glow * (exp(-r2 / 0.02) * 0.9 + exp(-r2 / 0.25) * 0.35);
+  // An unsure light keeps its winning colour in the core; the bloom drifts
+  // toward the runner-up (share is at most 0.5, so 2x reaches it fully).
+  vec3 bloom = mix(toLinear(light), toLinear(light2), min(amb.z * 2.0, 1.0));
+  col += glow * (toLinear(light) * exp(-r2 / 0.02) * 0.9 + bloom * exp(-r2 / 0.25) * 0.35);
 
   // Paper: static granulation that doesn't flicker, scaled by texture.
   float paper = fbm(gl_FragCoord.xy * 0.35) - 0.5;
@@ -533,6 +539,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         bg2H: u("u_bg2H"), bg2N: u("u_bg2N"),
         fg2H: u("u_fg2H"), fg2N: u("u_fg2N"),
         ambH: u("u_ambH"), ambN: u("u_ambN"),
+        light2H: u("u_light2H"), light2N: u("u_light2N"),
         lightH: u("u_lightH"), lightN: u("u_lightN"),
         lightPosH: u("u_lightPosH"), lightPosN: u("u_lightPosN"),
         glowH: u("u_glowH"), glowN: u("u_glowN"),
@@ -576,7 +583,8 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         gl.uniform3fv(U["fg" + suffix], s.fg);
         gl.uniform3fv(U["bg2" + suffix], s.bg2);
         gl.uniform3fv(U["fg2" + suffix], s.fg2);
-        gl.uniform2fv(U["amb" + suffix], s.amb);
+        gl.uniform3fv(U["light2" + suffix], s.light2);
+        gl.uniform3fv(U["amb" + suffix], s.amb);
         gl.uniform3fv(U["light" + suffix], s.light);
         gl.uniform2fv(U["lightPos" + suffix], s.lightPos);
         gl.uniform1f(U["glow" + suffix], s.glow);
@@ -621,7 +629,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       weights: new Float32Array(N).fill(1 / N),
       energy: 0.3, texture: 0.2, form: new Float32Array([1, 0, 0, 0]), conf: 0.5,
       bg: new Float32Array([1, 1, 1]), fg: new Float32Array([0, 0, 0]),
-      bg2: new Float32Array([1, 1, 1]), fg2: new Float32Array([0, 0, 0]), amb: new Float32Array([0, 0]),
+      bg2: new Float32Array([1, 1, 1]), fg2: new Float32Array([0, 0, 0]), light2: new Float32Array([1, 1, 1]), amb: new Float32Array([0, 0, 0]),
       light: new Float32Array([1, 1, 1]),
       lightPos: new Float32Array([0, 0]), glow: 0, comp: new Float32Array([0, 0, 0, 1]), horizonY: 0,
     });
@@ -652,6 +660,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       dst.fg.set(src.fg);
       dst.bg2.set(src.bg2);
       dst.fg2.set(src.fg2);
+      dst.light2.set(src.light2);
       dst.amb.set(src.amb);
       dst.light.set(src.light);
       dst.lightPos.set(src.lightPos);
@@ -683,7 +692,9 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       const altFg = amb.foreground ?? { colour: sc.foreground, share: 0 };
       state.bg2.set(rgb(PALETTE[altBg.colour]));
       state.fg2.set(rgb(PALETTE[altFg.colour]));
-      state.amb.set([altBg.share, altFg.share]);
+      const altLight = amb.light ?? { colour: sc.light, share: 0 };
+      state.light2.set(rgb(PALETTE[altLight.colour]));
+      state.amb.set([altBg.share, altFg.share, altLight.share]);
       state.light.set(rgb(PALETTE[sc.light]));
       state.lightPos.set(lightPosition(sc.lightPos, sc.horizon));
       state.glow = lightStrength(sc.lightPos, sc.glow);
@@ -697,7 +708,12 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       return 1.4 - 0.8 * e;
     }
 
+    // A dissolve interrupted by a newer answer (live typing) restarts from the
+    // frozen frame; cap its length so the picture keeps up with the keystrokes.
+    const CHAINED_HANDOFF_MAX = 0.55;
+
     function beginHandoff(data) {
+      const chained = phase === "handoff";
       const shaderOn = shader && document.body.classList.contains("shader");
       // Stripes already swapped. A dissolve from a picture that isn't on screen
       // would play later, from the wrong held state.
@@ -723,6 +739,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       applyAnswer(next, data);
       mix = 0;
       handoffDur = handoffDuration(next.energy);
+      if (chained) handoffDur = Math.min(handoffDur, CHAINED_HANDOFF_MAX);
       phase = "handoff";
     }
 
@@ -786,7 +803,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
           current.energy = lerp(current.energy, target.energy);
           current.texture = lerp(current.texture, target.texture);
           current.conf = lerp(current.conf, target.conf);
-          for (const key of ["bg", "fg", "bg2", "fg2", "amb", "light", "lightPos", "comp"]) {
+          for (const key of ["bg", "fg", "bg2", "fg2", "amb", "light2", "light", "lightPos", "comp"]) {
             for (let i = 0; i < current[key].length; i++) current[key][i] = lerp(current[key][i], target[key][i]);
           }
           current.glow = lerp(current.glow, target.glow);
@@ -825,26 +842,38 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
     // ------------------------------------------------------------------
     // Querying
     // ------------------------------------------------------------------
-    let controller;
+    // Live typing: one request in flight, and the newest text waits behind it.
+    // Aborting on every keystroke would starve the picture (each answer takes
+    // ~200ms, so a typist never lets one land), and the server finishes the
+    // Jev call anyway. Serial requests mean the picture trails the typing by
+    // about one round trip, and the last answer is always for the final text.
     let timer;
+    let inFlight = false;
+    let pendingText = null;
 
     async function query(text) {
-      controller?.abort();
       if (!text.trim()) return;
-      controller = new AbortController();
+      if (inFlight) {
+        pendingText = text;
+        return;
+      }
+      inFlight = true;
       statusEl.classList.add("on");
       try {
-        const res = await fetch(`/api/palette?q=${encodeURIComponent(text)}`, { signal: controller.signal });
+        const res = await fetch(`/api/palette?q=${encodeURIComponent(text)}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? res.status);
-        if (data.q === input.value) {
-          renderStripes(data.colors);
-          setTarget(data);
-        }
+        // Apply even if the field has moved on: an intermediate picture is the point.
+        renderStripes(data.colors);
+        setTarget(data);
       } catch (err) {
-        if (err.name !== "AbortError") console.error(err);
+        console.error(err);
       } finally {
-        if (input.value === text) statusEl.classList.remove("on");
+        inFlight = false;
+        const waiting = pendingText;
+        pendingText = null;
+        if (waiting && waiting !== text) query(waiting);
+        else if (input.value === text) statusEl.classList.remove("on");
       }
     }
 

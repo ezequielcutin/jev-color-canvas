@@ -82,6 +82,7 @@ export function sceneFromAnswers(answers) {
     ambiguity: {
       background: runnerUp(answers.background.probabilities, answers.background.choice),
       foreground: runnerUp(answers.foreground.probabilities, answers.foreground.choice),
+      light: runnerUp(answers.light.probabilities, answers.light.choice),
     },
   };
 }
@@ -99,5 +100,6 @@ export const DEFAULT_SCENE = {
   ambiguity: {
     background: { colour: "white", share: 0 },
     foreground: { colour: "black", share: 0 },
+    light: { colour: "white", share: 0 },
   },
 };

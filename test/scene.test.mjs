@@ -59,8 +59,24 @@ test("sceneFromAnswers picks colour choices and normalises scores to 0..1", () =
     ambiguity: {
       background: { colour: "orange", share: 0 },
       foreground: { colour: "black", share: 0 },
+      light: { colour: "yellow", share: 0 },
     },
   });
+});
+
+test("sceneFromAnswers reports a split light colour as ambiguity", () => {
+  const answers = {
+    background: { type: "choice", choice: "sky", probabilities: {} },
+    foreground: { type: "choice", choice: "black", probabilities: {} },
+    light: { type: "choice", choice: "gold", probabilities: { gold: 0.6, pink: 0.4 } },
+    lightPos: { type: "choice", choice: "top", probabilities: { top: 1 } },
+    composition: { type: "choice", choice: "field", probabilities: { field: 1 } },
+    horizon: { type: "score", score: 2 },
+    glow: { type: "score", score: 2 },
+  };
+  const { light } = sceneFromAnswers(answers).ambiguity;
+  assert.equal(light.colour, "pink");
+  assert.ok(Math.abs(light.share - 0.4) < 1e-9);
 });
 
 test("runnerUp reports a real second candidate as a share of the top two", () => {
@@ -84,6 +100,7 @@ test("runnerUp never gives the runner-up more than half the area", () => {
 test("DEFAULT_SCENE carries no ambiguity", () => {
   assert.equal(DEFAULT_SCENE.ambiguity.background.share, 0);
   assert.equal(DEFAULT_SCENE.ambiguity.foreground.share, 0);
+  assert.equal(DEFAULT_SCENE.ambiguity.light.share, 0);
 });
 
 test("DEFAULT_SCENE is a field composition with no light", () => {
