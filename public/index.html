@@ -384,9 +384,12 @@ out vec4 outColor;
 
 uniform vec2 u_res;
 uniform float u_time;
-uniform vec3 u_colors[${N}];
-uniform float u_wH[${N}];
-uniform float u_wN[${N}];
+// Only the colours that actually paint, in palette order: linear rgb plus the
+// share of the field each one owns. The shader loops over these, not all 64.
+uniform vec4 u_bandH[${N}];
+uniform vec4 u_bandN[${N}];
+uniform int u_nH;
+uniform int u_nN;
 uniform float u_energyH;
 uniform float u_energyN;
 uniform float u_textureH;
@@ -395,6 +398,8 @@ uniform vec4 u_formH;      // liquid, organic, geometric, glitch
 uniform vec4 u_formN;
 uniform float u_confH;
 uniform float u_confN;
+// Scene and light colours arrive in linear light (converted once on the CPU,
+// not per pixel), unlike the sRGB values held in the JS state.
 uniform vec3 u_bgH;
 uniform vec3 u_bgN;
 uniform vec3 u_fgH;
@@ -474,28 +479,40 @@ vec3 toSrgb(vec3 c) { return pow(max(c, 0.0), vec3(1.0 / 2.2)); }
 // 0 shows the winner, 1 shows the runner-up. A settled role slides its mask
 // to 0 or 1 everywhere: the user's tap decided the vote.
 float rivalMask(float share, vec2 p, float t, float seed, float conf, float settle, float goal) {
-  float n = fbm(p * 2.2 + seed + vec2(t * 0.08, -t * 0.05));
-  float thr = 0.78 - 1.12 * share;          // share 0.5 -> half the area
-  float w = mix(0.12, 0.03, conf);
-  float m = step(0.001, share) * smoothstep(thr - w, thr + w, n);
+  float m = 0.0;
+  if (share > 0.001) {                       // a settled answer has no patches to find
+    float n = fbm(p * 2.2 + seed + vec2(t * 0.08, -t * 0.05));
+    float thr = 0.78 - 1.12 * share;         // share 0.5 -> half the area
+    float w = mix(0.12, 0.03, conf);
+    m = smoothstep(thr - w, thr + w, n);
+  }
   return mix(m, goal, smoothstep(0.0, 1.0, settle));
 }
 
 // 1 where the scene shows its background, 0 where it shows the foreground.
 // Each composition has its own mask; they blend by Jev's probabilities.
 float backgroundMask(vec2 p, float t, vec4 comp, float horizon) {
+  // Only the compositions Jev gave a share are worked out (comp is a uniform).
+  float mHorizon = 0.0, mCentre = 0.0, mVertical = 0.0;
+
   // Horizon: background above a softly wobbling line.
-  float line = horizon + (fbm(vec2(p.x * 1.5, t * 0.2)) - 0.5) * 0.12;
-  float mHorizon = smoothstep(line - 0.06, line + 0.06, p.y);
+  if (comp.x > 0.0005) {
+    float line = horizon + (fbm(vec2(p.x * 1.5, t * 0.2)) - 0.5) * 0.12;
+    mHorizon = smoothstep(line - 0.06, line + 0.06, p.y);
+  }
 
   // Centre: the subject is a wobbly disc; background surrounds it.
-  float r = length(p * vec2(0.9, 1.1)) + (fbm(p * 3.0 + t * 0.3) - 0.5) * 0.15;
-  float mCentre = smoothstep(0.12, 0.5, r);
+  if (comp.y > 0.0005) {
+    float r = length(p * vec2(0.9, 1.1)) + (fbm(p * 3.0 + t * 0.3) - 0.5) * 0.15;
+    mCentre = smoothstep(0.12, 0.5, r);
+  }
 
   // Vertical: noisy columns rise from the bottom, with open background above.
-  float cols = noise(vec2(p.x * 5.0 + (fbm(p * 2.0) - 0.5) * 0.8, 0.5 + t * 0.05));
-  float tops = p.y + (noise(vec2(p.x * 9.0, 1.0)) - 0.5) * 0.4;
-  float mVertical = max(smoothstep(0.4, 0.6, cols), smoothstep(0.1, 0.5, tops));
+  if (comp.z > 0.0005) {
+    float cols = noise(vec2(p.x * 5.0 + (fbm(p * 2.0) - 0.5) * 0.8, 0.5 + t * 0.05));
+    float tops = p.y + (noise(vec2(p.x * 9.0, 1.0)) - 0.5) * 0.4;
+    mVertical = max(smoothstep(0.4, 0.6, cols), smoothstep(0.1, 0.5, tops));
+  }
 
   float structured = comp.x + comp.y + comp.z;
   return (comp.x * mHorizon + comp.y * mCentre + comp.z * mVertical) / max(structured, 1e-4);
@@ -521,25 +538,38 @@ vec3 paint(int set, vec2 uv, vec2 p, float t) {
   float horizon = set == 0 ? u_horizonH : u_horizonN;
   float amp = mix(0.12, 0.5, energy);
 
+  // Each form is only worked out if Jev gave it a share. The weights are
+  // uniforms, so a skipped form costs nothing on any pixel.
+  const float USED = 0.0005;
+  float fLiquid = 0.0, fOrganic = 0.0, fGeom = 0.0, fGlitch = 0.0;
+
   // Liquid: the original stripes, domain-warped into flowing paint.
-  vec2 w = vec2(fbm(p * 1.4 + vec2(t, -t * 0.7)), fbm(p * 1.4 + vec2(5.2 - t * 0.8, 1.3 + t)));
-  // Under a horizon composition the stripes lie down and stack like sky layers.
-  float across = mix(uv.x, 1.0 - uv.y, comp.x);
-  float fLiquid = across + amp * (w.x - 0.5) * 2.0 + 0.35 * amp * (fbm(p * 2.5 + w * 2.0) - 0.5);
+  if (form.x > USED) {
+    vec2 w = vec2(fbm(p * 1.4 + vec2(t, -t * 0.7)), fbm(p * 1.4 + vec2(5.2 - t * 0.8, 1.3 + t)));
+    // Under a horizon composition the stripes lie down and stack like sky layers.
+    float across = mix(uv.x, 1.0 - uv.y, comp.x);
+    fLiquid = across + amp * (w.x - 0.5) * 2.0 + 0.35 * amp * (fbm(p * 2.5 + w * 2.0) - 0.5);
+  }
 
   // Organic: wobbly concentric pools drifting around a moving centre.
-  vec2 c = 0.35 * vec2(sin(t * 0.9), cos(t * 0.7));
-  float fOrganic = length(p - c) * 1.3 + amp * (fbm(p * 2.0 + t * 0.5) - 0.5) * 1.6;
+  if (form.y > USED) {
+    vec2 c = 0.35 * vec2(sin(t * 0.9), cos(t * 0.7));
+    fOrganic = length(p - c) * 1.3 + amp * (fbm(p * 2.0 + t * 0.5) - 0.5) * 1.6;
+  }
 
   // Geometric: slowly rotating bands, offset per tile; offsets glide.
-  float ang = t * 0.2;
-  vec2 rp = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * p;
-  float fGeom = rp.x * 0.9 + 0.5 + (tiles(rp * 3.0, t * 0.6, 0.06) - 0.5) * amp * 0.9;
+  if (form.z > USED) {
+    float ang = t * 0.2;
+    vec2 rp = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * p;
+    fGeom = rp.x * 0.9 + 0.5 + (tiles(rp * 3.0, t * 0.6, 0.06) - 0.5) * amp * 0.9;
+  }
 
   // Glitch: row tears that fade in and out in bursts rather than re-rolling.
-  float burst = smoothstep(0.55, 0.85, noise(vec2(t * 0.9, 3.7)));
-  float rows = tiles(vec2(0.5, uv.y * 24.0), t * 1.8, 0.12) - 0.5;
-  float fGlitch = uv.x + rows * burst * amp * 1.4;
+  if (form.w > USED) {
+    float burst = smoothstep(0.55, 0.85, noise(vec2(t * 0.9, 3.7)));
+    float rows = tiles(vec2(0.5, uv.y * 24.0), t * 1.8, 0.12) - 0.5;
+    fGlitch = uv.x + rows * burst * amp * 1.4;
+  }
 
   float f = fold(dot(form, vec4(fLiquid, fOrganic, fGeom, fGlitch)) / max(dot(form, vec4(1.0)), 1e-4));
 
@@ -558,20 +588,18 @@ vec3 paint(int set, vec2 uv, vec2 p, float t) {
   vec3 col = vec3(0.0);
   float rim = 0.0;
   float edge = 0.0;
-  for (int i = 0; i < ${N}; i++) {
-    float wi = set == 0 ? u_wH[i] : u_wN[i];
+  int bands = set == 0 ? u_nH : u_nN;
+  for (int i = 0; i < bands; i++) {
+    vec4 band = set == 0 ? u_bandH[i] : u_bandN[i];
     float a = edge;
-    edge += wi;
+    edge += band.w;
     float b = edge;
-    // Empty slots must not paint. A zero-width band at either end of the
-    // field would otherwise leave a fringe of the first or last swatch.
-    if (wi < 0.0005) continue;
     // Coverage of band i = (past its lower edge) - (past its upper edge).
     // A band that starts at 0 or ends at 1 extends to that end of the field.
     float lo = a < 0.001 ? 1.0 : smoothstep(a - soft, a + soft, f);
     float hi = b > 0.999 ? 0.0 : smoothstep(b - soft, b + soft, f);
     float cover = max(lo - hi, 0.0);
-    col += toLinear(u_colors[i]) * cover;
+    col += band.rgb * cover;
     if (b < 0.998) {
       float d = (f - b) / (soft + aa + 0.004);
       rim = max(rim, exp(-d * d));
@@ -581,19 +609,22 @@ vec3 paint(int set, vec2 uv, vec2 p, float t) {
   // Scene layer: foreground/background regions under the paint. A pure
   // "field" composition keeps the paint layer as it was.
   const float SCENE_MIX = 0.55;
-  vec4 st = set == 0 ? u_settleH : u_settleN;
-  vec3 bgCol = mix(toLinear(bg), toLinear(bg2), rivalMask(amb.x, p, t, 3.1, conf, st.x, st.y));
-  vec3 fgCol = mix(toLinear(fg), toLinear(fg2), rivalMask(amb.y, p, t, 8.7, conf, st.z, st.w));
-  vec3 sceneCol = mix(fgCol, bgCol, backgroundMask(p, t, comp, horizon));
-  col = mix(col, sceneCol, SCENE_MIX * (1.0 - comp.w));
+  float sceneAmt = SCENE_MIX * (1.0 - comp.w);
+  if (sceneAmt > 0.0003) {
+    vec4 st = set == 0 ? u_settleH : u_settleN;
+    vec3 bgCol = mix(bg, bg2, rivalMask(amb.x, p, t, 3.1, conf, st.x, st.y));
+    vec3 fgCol = mix(fg, fg2, rivalMask(amb.y, p, t, 8.7, conf, st.z, st.w));
+    vec3 sceneCol = mix(fgCol, bgCol, backgroundMask(p, t, comp, horizon));
+    col = mix(col, sceneCol, sceneAmt);
+  }
 
   // Light: a tight core plus a wide bloom, added in linear light.
   vec2 dl = p - lightPos;
   float r2 = dot(dl, dl);
   // An unsure light keeps its winning colour in the core; the bloom drifts
   // toward the runner-up (share is at most 0.5, so 2x reaches it fully).
-  vec3 bloom = mix(toLinear(light), toLinear(light2), min(amb.z * 2.0, 1.0));
-  col += glow * (toLinear(light) * exp(-r2 / 0.02) * 0.9 + bloom * exp(-r2 / 0.25) * 0.35);
+  vec3 bloom = mix(light, light2, min(amb.z * 2.0, 1.0));
+  col += glow * (light * exp(-r2 / 0.02) * 0.9 + bloom * exp(-r2 / 0.25) * 0.35);
 
   // Paper: static granulation that doesn't flicker, scaled by texture.
   float paper = fbm(gl_FragCoord.xy * 0.35) - 0.5;
@@ -679,8 +710,8 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
 
       const u = (name) => gl.getUniformLocation(prog, name);
       const U = {
-        res: u("u_res"), time: u("u_time"), colors: u("u_colors"),
-        wH: u("u_wH"), wN: u("u_wN"),
+        res: u("u_res"), time: u("u_time"),
+        bandH: u("u_bandH"), bandN: u("u_bandN"), nH: u("u_nH"), nN: u("u_nN"),
         energyH: u("u_energyH"), energyN: u("u_energyN"),
         textureH: u("u_textureH"), textureN: u("u_textureN"),
         formH: u("u_formH"), formN: u("u_formN"),
@@ -700,7 +731,26 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         mix: u("u_mix"), heldTex: u("u_heldTex"), held: u("u_held"),
       };
 
-      gl.uniform3fv(U.colors, new Float32Array(ORDER.flatMap((n) => rgb(PALETTE[n]))));
+      // Palette colours in linear light, once, so the shader never calls pow() per band.
+      const LINEAR = ORDER.map((n) => rgb(PALETTE[n]).map((c) => Math.pow(c, 2.2)));
+      const bandBuf = new Float32Array(N * 4);
+
+      // Active colours only (a settled answer has a handful, the opening ease
+      // briefly has all of them), renormalised so dropped slivers cannot leave
+      // the last band short of the end of the field.
+      function packBands(weights) {
+        let n = 0;
+        let sum = 0;
+        for (let i = 0; i < N; i++) {
+          if (weights[i] < 0.0005) continue;
+          bandBuf.set(LINEAR[i], n * 4);
+          bandBuf[n * 4 + 3] = weights[i];
+          sum += weights[i];
+          n++;
+        }
+        for (let k = 0; k < n; k++) bandBuf[k * 4 + 3] /= sum || 1;
+        return n;
+      }
       gl.uniform1i(U.held, 0);
 
       const heldTex = gl.createTexture();
@@ -725,20 +775,30 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         gl.uniform2f(U.res, w, h);
       }
 
+      const linear3 = new Float32Array(3);
+      function uploadLinear(location, srgb) {
+        linear3[0] = Math.pow(srgb[0], 2.2);
+        linear3[1] = Math.pow(srgb[1], 2.2);
+        linear3[2] = Math.pow(srgb[2], 2.2);
+        gl.uniform3fv(location, linear3);
+      }
+
       function upload(suffix, s) {
-        gl.uniform1fv(U["w" + suffix], s.weights);
+        const n = packBands(s.weights);
+        gl.uniform4fv(U["band" + suffix], bandBuf.subarray(0, Math.max(n, 1) * 4));
+        gl.uniform1i(U["n" + suffix], n);
         gl.uniform1f(U["energy" + suffix], s.energy);
         gl.uniform1f(U["texture" + suffix], s.texture);
         gl.uniform4fv(U["form" + suffix], s.form);
         gl.uniform1f(U["conf" + suffix], s.conf);
-        gl.uniform3fv(U["bg" + suffix], s.bg);
-        gl.uniform3fv(U["fg" + suffix], s.fg);
-        gl.uniform3fv(U["bg2" + suffix], s.bg2);
-        gl.uniform3fv(U["fg2" + suffix], s.fg2);
-        gl.uniform3fv(U["light2" + suffix], s.light2);
+        uploadLinear(U["bg" + suffix], s.bg);
+        uploadLinear(U["fg" + suffix], s.fg);
+        uploadLinear(U["bg2" + suffix], s.bg2);
+        uploadLinear(U["fg2" + suffix], s.fg2);
+        uploadLinear(U["light2" + suffix], s.light2);
         gl.uniform3fv(U["amb" + suffix], s.amb);
         gl.uniform4fv(U["settle" + suffix], s.settle);
-        gl.uniform3fv(U["light" + suffix], s.light);
+        uploadLinear(U["light" + suffix], s.light);
         gl.uniform2fv(U["lightPos" + suffix], s.lightPos);
         gl.uniform1f(U["glow" + suffix], s.glow);
         gl.uniform4fv(U["comp" + suffix], s.comp);
