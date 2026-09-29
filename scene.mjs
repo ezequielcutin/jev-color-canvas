@@ -53,6 +53,36 @@ export function sceneQuestions(colourCriteria) {
   };
 }
 
+// Ambiguity: when Jev splits its vote ("bank" is river-green *and* vault-grey),
+// keep the second candidate and its share of the area instead of dropping it.
+// The renderer paints the two side by side, so an unsure answer looks unsure.
+const MIN_RUNNER_UP = 0.15; // below this the second place is a tail, not a rival
+const MAX_RUNNER_SHARE = 0.5; // one colour always leads
+const MAX_IDEAS = 5;
+
+// Everything Jev gave real probability to besides the winner, best first. A
+// certain answer has none (its tail is exactly zero); the swatch picker fills
+// in with neighbouring colours.
+function otherIdeas(probabilities, winner) {
+  return Object.entries(probabilities ?? {})
+    .filter(([name, p]) => name !== winner && p > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_IDEAS)
+    .map(([name]) => name);
+}
+
+export function runnerUp(probabilities, winner) {
+  const options = otherIdeas(probabilities, winner);
+  const rivals = Object.entries(probabilities ?? {})
+    .filter(([name, p]) => name !== winner && p >= MIN_RUNNER_UP)
+    .sort((a, b) => b[1] - a[1]);
+  if (rivals.length === 0) return { colour: winner, share: 0, options };
+  const [colour, p2] = rivals[0];
+  const p1 = probabilities[winner] ?? 0;
+  const share = Math.min(p2 / (p1 + p2), MAX_RUNNER_SHARE);
+  return { colour, share, options };
+}
+
 export function sceneFromAnswers(answers) {
   return {
     background: answers.background.choice,
@@ -62,6 +92,11 @@ export function sceneFromAnswers(answers) {
     composition: answers.composition.probabilities,
     horizon: answers.horizon.score / (HORIZON_LEVELS.length - 1),
     glow: answers.glow.score / (GLOW_LEVELS.length - 1),
+    ambiguity: {
+      background: runnerUp(answers.background.probabilities, answers.background.choice),
+      foreground: runnerUp(answers.foreground.probabilities, answers.foreground.choice),
+      light: runnerUp(answers.light.probabilities, answers.light.choice),
+    },
   };
 }
 
@@ -75,4 +110,9 @@ export const DEFAULT_SCENE = {
   composition: { field: 1 },
   horizon: 0.5,
   glow: 0,
+  ambiguity: {
+    background: { colour: "white", share: 0, options: [] },
+    foreground: { colour: "black", share: 0, options: [] },
+    light: { colour: "white", share: 0, options: [] },
+  },
 };
