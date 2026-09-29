@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   sceneQuestions,
   sceneFromAnswers,
+  runnerUp,
   DEFAULT_SCENE,
   COMPOSITIONS,
   LIGHT_POSITIONS,
@@ -55,7 +56,34 @@ test("sceneFromAnswers picks colour choices and normalises scores to 0..1", () =
     composition: { horizon: 0.9, centre: 0.1 },
     horizon: 1 / (HORIZON_LEVELS.length - 1),
     glow: 3 / (GLOW_LEVELS.length - 1),
+    ambiguity: {
+      background: { colour: "orange", share: 0 },
+      foreground: { colour: "black", share: 0 },
+    },
   });
+});
+
+test("runnerUp reports a real second candidate as a share of the top two", () => {
+  const r = runnerUp({ green: 0.55, grey: 0.35, blue: 0.1 }, "green");
+  assert.equal(r.colour, "grey");
+  assert.ok(Math.abs(r.share - 0.35 / 0.9) < 1e-9);
+});
+
+test("runnerUp ignores a settled answer and a thin tail", () => {
+  assert.deepEqual(runnerUp({ green: 0.95, grey: 0.05 }, "green"), { colour: "green", share: 0 });
+  assert.deepEqual(runnerUp({}, "green"), { colour: "green", share: 0 });
+  assert.deepEqual(runnerUp(undefined, "green"), { colour: "green", share: 0 });
+});
+
+test("runnerUp never gives the runner-up more than half the area", () => {
+  // A dead heat still has one winner; the split is at most 50/50.
+  assert.equal(runnerUp({ green: 0.5, grey: 0.5 }, "green").share, 0.5);
+  assert.equal(runnerUp({ green: 0.3, grey: 0.6 }, "green").share, 0.5);
+});
+
+test("DEFAULT_SCENE carries no ambiguity", () => {
+  assert.equal(DEFAULT_SCENE.ambiguity.background.share, 0);
+  assert.equal(DEFAULT_SCENE.ambiguity.foreground.share, 0);
 });
 
 test("DEFAULT_SCENE is a field composition with no light", () => {

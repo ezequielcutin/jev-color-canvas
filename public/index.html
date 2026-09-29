@@ -265,6 +265,12 @@ uniform vec3 u_bgH;
 uniform vec3 u_bgN;
 uniform vec3 u_fgH;
 uniform vec3 u_fgN;
+uniform vec3 u_bg2H;       // runner-up background / foreground colours
+uniform vec3 u_bg2N;
+uniform vec3 u_fg2H;
+uniform vec3 u_fg2N;
+uniform vec2 u_ambH;       // runner-up share of the background, foreground
+uniform vec2 u_ambN;
 uniform vec3 u_lightH;
 uniform vec3 u_lightN;
 uniform vec2 u_lightPosH;
@@ -322,6 +328,17 @@ float tiles(vec2 g, float t, float edge) {
 vec3 toLinear(vec3 c) { return pow(c, vec3(2.2)); }
 vec3 toSrgb(vec3 c) { return pow(max(c, 0.0), vec3(1.0 / 2.2)); }
 
+// Ambiguity as material: where Jev split its vote, the second colour appears
+// as drifting patches sized by its share. Confidence sets how hard the patch
+// edges are: an unsure answer bleeds, a sure one is crisp. A share of 0 (a
+// settled answer) paints nothing, so unambiguous words look as before.
+vec3 rival(vec3 a, vec3 b, float share, vec2 p, float t, float seed, float conf) {
+  float n = fbm(p * 2.2 + seed + vec2(t * 0.08, -t * 0.05));
+  float thr = 0.78 - 1.12 * share;          // share 0.5 -> half the area
+  float w = mix(0.12, 0.03, conf);
+  return mix(a, b, step(0.001, share) * smoothstep(thr - w, thr + w, n));
+}
+
 // 1 where the scene shows its background, 0 where it shows the foreground.
 // Each composition has its own mask; they blend by Jev's probabilities.
 float backgroundMask(vec2 p, float t, vec4 comp, float horizon) {
@@ -351,6 +368,9 @@ vec3 paint(int set, vec2 uv, vec2 p, float t) {
   float conf = set == 0 ? u_confH : u_confN;
   vec3 bg = set == 0 ? u_bgH : u_bgN;
   vec3 fg = set == 0 ? u_fgH : u_fgN;
+  vec3 bg2 = set == 0 ? u_bg2H : u_bg2N;
+  vec3 fg2 = set == 0 ? u_fg2H : u_fg2N;
+  vec2 amb = set == 0 ? u_ambH : u_ambN;
   vec3 light = set == 0 ? u_lightH : u_lightN;
   vec2 lightPos = set == 0 ? u_lightPosH : u_lightPosN;
   float glow = set == 0 ? u_glowH : u_glowN;
@@ -418,7 +438,9 @@ vec3 paint(int set, vec2 uv, vec2 p, float t) {
   // Scene layer: foreground/background regions under the paint. A pure
   // "field" composition keeps the paint layer as it was.
   const float SCENE_MIX = 0.55;
-  vec3 sceneCol = mix(toLinear(fg), toLinear(bg), backgroundMask(p, t, comp, horizon));
+  vec3 bgCol = rival(toLinear(bg), toLinear(bg2), amb.x, p, t, 3.1, conf);
+  vec3 fgCol = rival(toLinear(fg), toLinear(fg2), amb.y, p, t, 8.7, conf);
+  vec3 sceneCol = mix(fgCol, bgCol, backgroundMask(p, t, comp, horizon));
   col = mix(col, sceneCol, SCENE_MIX * (1.0 - comp.w));
 
   // Light: a tight core plus a wide bloom, added in linear light.
@@ -508,6 +530,9 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         confH: u("u_confH"), confN: u("u_confN"),
         bgH: u("u_bgH"), bgN: u("u_bgN"),
         fgH: u("u_fgH"), fgN: u("u_fgN"),
+        bg2H: u("u_bg2H"), bg2N: u("u_bg2N"),
+        fg2H: u("u_fg2H"), fg2N: u("u_fg2N"),
+        ambH: u("u_ambH"), ambN: u("u_ambN"),
         lightH: u("u_lightH"), lightN: u("u_lightN"),
         lightPosH: u("u_lightPosH"), lightPosN: u("u_lightPosN"),
         glowH: u("u_glowH"), glowN: u("u_glowN"),
@@ -549,6 +574,9 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         gl.uniform1f(U["conf" + suffix], s.conf);
         gl.uniform3fv(U["bg" + suffix], s.bg);
         gl.uniform3fv(U["fg" + suffix], s.fg);
+        gl.uniform3fv(U["bg2" + suffix], s.bg2);
+        gl.uniform3fv(U["fg2" + suffix], s.fg2);
+        gl.uniform2fv(U["amb" + suffix], s.amb);
         gl.uniform3fv(U["light" + suffix], s.light);
         gl.uniform2fv(U["lightPos" + suffix], s.lightPos);
         gl.uniform1f(U["glow" + suffix], s.glow);
@@ -592,7 +620,9 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
     const initialState = () => ({
       weights: new Float32Array(N).fill(1 / N),
       energy: 0.3, texture: 0.2, form: new Float32Array([1, 0, 0, 0]), conf: 0.5,
-      bg: new Float32Array([1, 1, 1]), fg: new Float32Array([0, 0, 0]), light: new Float32Array([1, 1, 1]),
+      bg: new Float32Array([1, 1, 1]), fg: new Float32Array([0, 0, 0]),
+      bg2: new Float32Array([1, 1, 1]), fg2: new Float32Array([0, 0, 0]), amb: new Float32Array([0, 0]),
+      light: new Float32Array([1, 1, 1]),
       lightPos: new Float32Array([0, 0]), glow: 0, comp: new Float32Array([0, 0, 0, 1]), horizonY: 0,
     });
     const current = initialState();
@@ -620,6 +650,9 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       dst.form.set(src.form);
       dst.bg.set(src.bg);
       dst.fg.set(src.fg);
+      dst.bg2.set(src.bg2);
+      dst.fg2.set(src.fg2);
+      dst.amb.set(src.amb);
       dst.light.set(src.light);
       dst.lightPos.set(src.lightPos);
       dst.comp.set(src.comp);
@@ -645,6 +678,12 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       const sc = data.scene;
       state.bg.set(rgb(PALETTE[sc.background]));
       state.fg.set(rgb(PALETTE[sc.foreground]));
+      const amb = sc.ambiguity ?? {};
+      const altBg = amb.background ?? { colour: sc.background, share: 0 };
+      const altFg = amb.foreground ?? { colour: sc.foreground, share: 0 };
+      state.bg2.set(rgb(PALETTE[altBg.colour]));
+      state.fg2.set(rgb(PALETTE[altFg.colour]));
+      state.amb.set([altBg.share, altFg.share]);
       state.light.set(rgb(PALETTE[sc.light]));
       state.lightPos.set(lightPosition(sc.lightPos, sc.horizon));
       state.glow = lightStrength(sc.lightPos, sc.glow);
@@ -687,6 +726,13 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       phase = "handoff";
     }
 
+    function ambiguityLine(amb) {
+      const parts = Object.entries(amb ?? {})
+        .filter(([, a]) => a.share > 0)
+        .map(([role, a]) => `${role} ↔ ${a.colour} ${(a.share * 100).toFixed(0)}%`);
+      return parts.length ? parts.join(", ") : "settled";
+    }
+
     function setTarget(data) {
       const topForm = FORMS.reduce((a, b) => (data.form[a] >= data.form[b] ? a : b));
       const topOf = (probs) => Object.entries(probs).reduce((a, b) => (b[1] > a[1] ? b : a));
@@ -699,6 +745,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         `form     ${topForm} ${(data.form[topForm] * 100).toFixed(0)}%\n` +
         `scene    ${comp} ${(compP * 100).toFixed(0)}%  ${sc.background} / ${sc.foreground}\n` +
         `light    ${sc.light} @ ${lightAt}  glow ${sc.glow.toFixed(2)}\n` +
+        `unsure   ${ambiguityLine(sc.ambiguity)}\n` +
         `conf     ${data.confidence.toFixed(2)}\n` +
         `jev      ${data.ms}ms`;
 
@@ -739,7 +786,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
           current.energy = lerp(current.energy, target.energy);
           current.texture = lerp(current.texture, target.texture);
           current.conf = lerp(current.conf, target.conf);
-          for (const key of ["bg", "fg", "light", "lightPos", "comp"]) {
+          for (const key of ["bg", "fg", "bg2", "fg2", "amb", "light", "lightPos", "comp"]) {
             for (let i = 0; i < current[key].length; i++) current[key][i] = lerp(current[key][i], target[key][i]);
           }
           current.glow = lerp(current.glow, target.glow);
