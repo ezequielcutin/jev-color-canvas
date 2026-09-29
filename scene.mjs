@@ -58,16 +58,29 @@ export function sceneQuestions(colourCriteria) {
 // The renderer paints the two side by side, so an unsure answer looks unsure.
 const MIN_RUNNER_UP = 0.15; // below this the second place is a tail, not a rival
 const MAX_RUNNER_SHARE = 0.5; // one colour always leads
+const MAX_IDEAS = 5;
+
+// Everything Jev gave real probability to besides the winner, best first. A
+// certain answer has none (its tail is exactly zero); the swatch picker fills
+// in with neighbouring colours.
+function otherIdeas(probabilities, winner) {
+  return Object.entries(probabilities ?? {})
+    .filter(([name, p]) => name !== winner && p > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_IDEAS)
+    .map(([name]) => name);
+}
 
 export function runnerUp(probabilities, winner) {
+  const options = otherIdeas(probabilities, winner);
   const rivals = Object.entries(probabilities ?? {})
     .filter(([name, p]) => name !== winner && p >= MIN_RUNNER_UP)
     .sort((a, b) => b[1] - a[1]);
-  if (rivals.length === 0) return { colour: winner, share: 0 };
+  if (rivals.length === 0) return { colour: winner, share: 0, options };
   const [colour, p2] = rivals[0];
   const p1 = probabilities[winner] ?? 0;
   const share = Math.min(p2 / (p1 + p2), MAX_RUNNER_SHARE);
-  return { colour, share };
+  return { colour, share, options };
 }
 
 export function sceneFromAnswers(answers) {
@@ -98,8 +111,8 @@ export const DEFAULT_SCENE = {
   horizon: 0.5,
   glow: 0,
   ambiguity: {
-    background: { colour: "white", share: 0 },
-    foreground: { colour: "black", share: 0 },
-    light: { colour: "white", share: 0 },
+    background: { colour: "white", share: 0, options: [] },
+    foreground: { colour: "black", share: 0, options: [] },
+    light: { colour: "white", share: 0, options: [] },
   },
 };

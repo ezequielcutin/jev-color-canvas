@@ -53,11 +53,21 @@
       z-index: 2;
       pointer-events: none;
     }
-    .field { position: relative; width: min(640px, 100%); pointer-events: auto; }
+    /* --accent follows the picture: its dominant colour, lifted to stay legible.
+       Registered so it eases between words instead of snapping. */
+    @property --accent { syntax: "<color>"; inherits: true; initial-value: #ffffff; }
+    html { transition: --accent 0.9s cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+    .field {
+      position: relative;
+      width: min(640px, 100%);
+      pointer-events: auto;
+      --bleed: 0.4px;
+      transition: background 0.5s, box-shadow 0.6s;
+    }
     input {
       width: 100%;
       border: 0;
-      border-bottom: 1.5px solid currentColor;
       padding: 8px 0;
       font: inherit;
       font-size: clamp(18px, 3vw, 28px);
@@ -65,7 +75,71 @@
       background: transparent;
       color: inherit;
       outline: none;
+      caret-color: currentColor;
     }
+    body.shader input { caret-color: var(--accent); }
+    body.shader input::selection {
+      background: color-mix(in srgb, var(--accent) 38%, transparent);
+      color: inherit;
+    }
+
+    /* Ideas to type, shown only while the field is empty. */
+    .hint {
+      position: absolute;
+      inset: 0 0 3px 0;
+      display: grid;
+      place-items: center;
+      font-size: clamp(18px, 3vw, 28px);
+      white-space: nowrap;
+      overflow: hidden;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.7s ease;
+    }
+    input:placeholder-shown ~ .hint.on { opacity: 0.38; }
+
+    /* The underline is the palette itself, in proportion. How soft its edges
+       are is how unsure Jev is; while Jev thinks, light travels along it. */
+    .line {
+      position: absolute;
+      left: var(--pad, 0px);
+      right: var(--pad, 0px);
+      bottom: var(--line-bottom, 0px);
+      height: 3px;
+      border-radius: 3px;
+      display: flex;
+      overflow: hidden;
+      filter: blur(var(--bleed));
+      pointer-events: none;
+      transition: left 0.55s cubic-bezier(0.2, 0.8, 0.2, 1), right 0.55s cubic-bezier(0.2, 0.8, 0.2, 1),
+        height 0.3s, opacity 0.4s;
+    }
+    .field:not(:focus-within) .line {
+      left: calc(var(--pad, 0px) + 27%);
+      right: calc(var(--pad, 0px) + 27%);
+      height: 2px;
+      opacity: 0.75;
+    }
+    .seg {
+      flex-basis: 0;
+      min-width: 0;
+      transition: flex-grow 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .line::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9), transparent);
+      transform: translateX(-100%);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .field.thinking .line::after { opacity: 1; animation: sweep 1.05s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+    @keyframes sweep { to { transform: translateX(100%); } }
+    @media (prefers-reduced-motion: reduce) {
+      .field.thinking .line::after { animation: none; transform: none; opacity: 0.35; }
+    }
+
     .status {
       position: absolute;
       right: 0;
@@ -73,8 +147,12 @@
       font-size: 12px;
       opacity: 0;
       transition: opacity 0.2s;
+      /* A message, not a control: clicks pass through to the picture instead
+         of counting as "inside the field" (which would focus the input). */
+      pointer-events: none;
+      user-select: none;
     }
-    .status.on { opacity: 0.5; }
+    .status.on { opacity: 0.6; }
 
     /* ---- stripes mode (the original replica) ---- */
     .stripes {
@@ -95,13 +173,19 @@
     body.shader .stripes { display: none; }
     body.shader .top { inset: 0 0 auto 0; height: 38%; color: #fff; }
     body.shader .field {
-      padding: 10px 28px 14px;
+      --pad: 28px;
+      --line-bottom: 10px;
+      padding: 10px 28px 18px;
       border-radius: 18px;
-      background: rgba(0, 0, 0, 0.28);
+      background: rgba(0, 0, 0, 0.18);
       backdrop-filter: blur(18px) saturate(1.4);
       -webkit-backdrop-filter: blur(18px) saturate(1.4);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 12px 44px -18px var(--accent);
     }
-    body.shader input { border-bottom-color: rgba(255, 255, 255, 0.6); }
+    body.shader .field:focus-within {
+      background: rgba(0, 0, 0, 0.34);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16), 0 16px 60px -12px var(--accent);
+    }
     body.shader .status { right: 28px; }
     /* A short phone, or one with the keyboard up, has no room to centre
        the field in the top band. Sit it under the mode button instead. */
@@ -116,6 +200,42 @@
       height: auto;
       place-items: start center;
       padding-top: calc(max(12px, env(safe-area-inset-top)) + 60px);
+    }
+
+    /* Swatch picker: opens at the tap when Jev was sure and you disagree. */
+    .picker {
+      position: fixed;
+      z-index: 5;
+      display: none;
+      padding: 12px;
+      border-radius: 16px;
+      color: #fff;
+      background: rgba(0, 0, 0, 0.46);
+      backdrop-filter: blur(18px) saturate(1.4);
+      -webkit-backdrop-filter: blur(18px) saturate(1.4);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 18px 50px -16px rgba(0, 0, 0, 0.6);
+      font-size: 11px;
+      transform-origin: 50% 100%;
+    }
+    .picker.on { display: block; animation: pop 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.25); }
+    @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(0.92); } }
+    .picker .cap { opacity: 0.65; margin: 0 2px 10px; letter-spacing: 0.02em; }
+    .picker .row { display: grid; grid-template-columns: repeat(4, 30px); gap: 10px; }
+    .sw {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+      transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1.4), box-shadow 0.15s;
+    }
+    .sw:hover, .sw:focus-visible { transform: scale(1.18); outline: none; }
+    .sw.cur { box-shadow: 0 0 0 2px #fff; }
+    @media (pointer: coarse) {
+      .picker .row { grid-template-columns: repeat(4, 40px); gap: 12px; }
+      .sw { width: 40px; height: 40px; }
     }
 
     .hud {
@@ -169,18 +289,23 @@
 <body>
   <canvas id="gl"></canvas>
   <div class="top">
-    <div class="field">
-      <input id="q" value="tomato" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" />
-      <div class="status" id="status">thinking…</div>
+    <div class="field" id="field">
+      <input id="q" value="tomato" placeholder=" " aria-label="Type a word" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" />
+      <div class="hint" id="hint" aria-hidden="true"></div>
+      <div class="line" id="line" aria-hidden="true"></div>
+      <div class="status" id="status" role="status"></div>
     </div>
   </div>
   <div class="stripes" id="stripes"></div>
   <div class="hud" id="hud"></div>
+  <div class="picker" id="picker" role="group" aria-label="Choose a colour"></div>
   <button class="toggle" id="toggle"></button>
 
   <script type="module">
     import { PALETTE, ORDER } from "/palette.mjs";
     import { horizonY, lightPosition, lightStrength, compositionVector } from "/scene-uniforms.mjs";
+    import { decideSettle } from "/settle.mjs";
+    import { pickerOptions } from "/swatches.mjs";
 
     // Keep the picture inside the area that is actually visible. On a phone
     // that is the space above the keyboard and below the browser chrome.
@@ -203,36 +328,45 @@
     const input = document.getElementById("q");
     const stripesEl = document.getElementById("stripes");
     const statusEl = document.getElementById("status");
+    const fieldEl = document.getElementById("field");
+    const lineEl = document.getElementById("line");
+    const hintEl = document.getElementById("hint");
+    const pickerEl = document.getElementById("picker");
     const hudEl = document.getElementById("hud");
     const toggleEl = document.getElementById("toggle");
 
     // ------------------------------------------------------------------
     // Stripes (original replica)
     // ------------------------------------------------------------------
-    const stripeEls = new Map();
-
-    function renderStripes(colors) {
-      const seen = new Set();
-      colors.forEach(({ name, hex, weight }, i) => {
-        let el = stripeEls.get(name);
-        if (!el) {
-          el = document.createElement("div");
-          el.className = "stripe";
-          el.style.flexGrow = "0";
-          el.style.backgroundColor = hex;
-          stripeEls.set(name, el);
-          stripesEl.appendChild(el);
-          el.getBoundingClientRect(); // commit the 0 width so it grows in
+    // One renderer per container: a band per colour whose flex-grow eases to
+    // its share, so the stripes and the search-bar underline behave alike.
+    function bandRenderer(container, className) {
+      const els = new Map();
+      return (colors) => {
+        const seen = new Set();
+        colors.forEach(({ name, hex, weight }, i) => {
+          let el = els.get(name);
+          if (!el) {
+            el = document.createElement("div");
+            el.className = className;
+            el.style.flexGrow = "0";
+            el.style.backgroundColor = hex;
+            els.set(name, el);
+            container.appendChild(el);
+            el.getBoundingClientRect(); // commit the 0 width so it grows in
+          }
+          el.style.order = String(i);
+          el.style.flexGrow = String(weight);
+          el.title = `${name} ${(weight * 100).toFixed(0)}%`;
+          seen.add(name);
+        });
+        for (const [name, el] of els) {
+          if (!seen.has(name)) el.style.flexGrow = "0";
         }
-        el.style.order = String(i);
-        el.style.flexGrow = String(weight);
-        el.title = `${name} ${(weight * 100).toFixed(0)}%`;
-        seen.add(name);
-      });
-      for (const [name, el] of stripeEls) {
-        if (!seen.has(name)) el.style.flexGrow = "0";
-      }
+      };
     }
+    const renderStripes = bandRenderer(stripesEl, "stripe");
+    const renderLine = bandRenderer(lineEl, "seg");
 
     // ------------------------------------------------------------------
     // Shader
@@ -283,6 +417,9 @@ uniform vec4 u_compH;      // horizon, centre, vertical, field
 uniform vec4 u_compN;
 uniform float u_horizonH;
 uniform float u_horizonN;
+uniform vec4 u_settleH;    // per role (background, foreground): progress, goal (0 winner, 1 runner-up)
+uniform vec4 u_settleN;
+uniform float u_pick;      // 1 = write what each pixel shows, for tap picking
 uniform float u_mix;       // 0 = held picture, 1 = incoming picture
 uniform float u_heldTex;   // 1 when the held picture is a framebuffer still
 uniform sampler2D u_held;
@@ -334,11 +471,14 @@ vec3 toSrgb(vec3 c) { return pow(max(c, 0.0), vec3(1.0 / 2.2)); }
 // as drifting patches sized by its share. Confidence sets how hard the patch
 // edges are: an unsure answer bleeds, a sure one is crisp. A share of 0 (a
 // settled answer) paints nothing, so unambiguous words look as before.
-vec3 rival(vec3 a, vec3 b, float share, vec2 p, float t, float seed, float conf) {
+// 0 shows the winner, 1 shows the runner-up. A settled role slides its mask
+// to 0 or 1 everywhere: the user's tap decided the vote.
+float rivalMask(float share, vec2 p, float t, float seed, float conf, float settle, float goal) {
   float n = fbm(p * 2.2 + seed + vec2(t * 0.08, -t * 0.05));
   float thr = 0.78 - 1.12 * share;          // share 0.5 -> half the area
   float w = mix(0.12, 0.03, conf);
-  return mix(a, b, step(0.001, share) * smoothstep(thr - w, thr + w, n));
+  float m = step(0.001, share) * smoothstep(thr - w, thr + w, n);
+  return mix(m, goal, smoothstep(0.0, 1.0, settle));
 }
 
 // 1 where the scene shows its background, 0 where it shows the foreground.
@@ -441,8 +581,9 @@ vec3 paint(int set, vec2 uv, vec2 p, float t) {
   // Scene layer: foreground/background regions under the paint. A pure
   // "field" composition keeps the paint layer as it was.
   const float SCENE_MIX = 0.55;
-  vec3 bgCol = rival(toLinear(bg), toLinear(bg2), amb.x, p, t, 3.1, conf);
-  vec3 fgCol = rival(toLinear(fg), toLinear(fg2), amb.y, p, t, 8.7, conf);
+  vec4 st = set == 0 ? u_settleH : u_settleN;
+  vec3 bgCol = mix(toLinear(bg), toLinear(bg2), rivalMask(amb.x, p, t, 3.1, conf, st.x, st.y));
+  vec3 fgCol = mix(toLinear(fg), toLinear(fg2), rivalMask(amb.y, p, t, 8.7, conf, st.z, st.w));
   vec3 sceneCol = mix(fgCol, bgCol, backgroundMask(p, t, comp, horizon));
   col = mix(col, sceneCol, SCENE_MIX * (1.0 - comp.w));
 
@@ -466,6 +607,16 @@ void main() {
   float t = u_time;
   // Slow at each end, quick through the double exposure.
   float s = smoothstep(0.0, 1.0, clamp(u_mix, 0.0, 1.0));
+
+  // Pick pass: not a picture. Each pixel says what the incoming scene shows
+  // there, so a tap can be answered by reading one pixel back.
+  if (u_pick > 0.5) {
+    float m = backgroundMask(p, t, u_compN, u_horizonN);
+    float rb = rivalMask(u_ambN.x, p, t, 3.1, u_confN, u_settleN.x, u_settleN.y);
+    float rf = rivalMask(u_ambN.y, p, t, 8.7, u_confN, u_settleN.z, u_settleN.w);
+    outColor = vec4(m, rb, rf, 1.0);
+    return;
+  }
 
   vec3 col;
   float texAmt;
@@ -539,6 +690,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         bg2H: u("u_bg2H"), bg2N: u("u_bg2N"),
         fg2H: u("u_fg2H"), fg2N: u("u_fg2N"),
         ambH: u("u_ambH"), ambN: u("u_ambN"),
+        settleH: u("u_settleH"), settleN: u("u_settleN"), pick: u("u_pick"),
         light2H: u("u_light2H"), light2N: u("u_light2N"),
         lightH: u("u_lightH"), lightN: u("u_lightN"),
         lightPosH: u("u_lightPosH"), lightPosN: u("u_lightPosN"),
@@ -585,6 +737,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         gl.uniform3fv(U["fg2" + suffix], s.fg2);
         gl.uniform3fv(U["light2" + suffix], s.light2);
         gl.uniform3fv(U["amb" + suffix], s.amb);
+        gl.uniform4fv(U["settle" + suffix], s.settle);
         gl.uniform3fv(U["light" + suffix], s.light);
         gl.uniform2fv(U["lightPos" + suffix], s.lightPos);
         gl.uniform1f(U["glow" + suffix], s.glow);
@@ -604,6 +757,26 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
           texW = w;
           texH = h;
           return true;
+        },
+        // What does the incoming scene show at this point (client px)? Draws the
+        // pick pass, reads one pixel back, and the normal frame overwrites it
+        // before anything is presented.
+        pick(state, time, clientX, clientY) {
+          resize();
+          const rect = canvas.getBoundingClientRect();
+          const x = Math.floor(((clientX - rect.left) / rect.width) * canvas.width);
+          const y = Math.floor(canvas.height - ((clientY - rect.top) / rect.height) * canvas.height);
+          if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return null;
+          gl.uniform1f(U.time, time);
+          gl.uniform1f(U.mix, 1);
+          gl.uniform1f(U.heldTex, 0);
+          gl.uniform1f(U.pick, 1);
+          upload("N", state);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          const px = new Uint8Array(4);
+          gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+          gl.uniform1f(U.pick, 0);
+          return { bgMask: px[0] / 255, bgRival: px[1] / 255, fgRival: px[2] / 255 };
         },
         draw(held, next, mix, useTex, time) {
           resize();
@@ -630,6 +803,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       energy: 0.3, texture: 0.2, form: new Float32Array([1, 0, 0, 0]), conf: 0.5,
       bg: new Float32Array([1, 1, 1]), fg: new Float32Array([0, 0, 0]),
       bg2: new Float32Array([1, 1, 1]), fg2: new Float32Array([0, 0, 0]), light2: new Float32Array([1, 1, 1]), amb: new Float32Array([0, 0, 0]),
+      settle: new Float32Array(4), settleGoal: new Float32Array(2),
       light: new Float32Array([1, 1, 1]),
       lightPos: new Float32Array([0, 0]), glow: 0, comp: new Float32Array([0, 0, 0, 1]), horizonY: 0,
     });
@@ -661,6 +835,8 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       dst.bg2.set(src.bg2);
       dst.fg2.set(src.fg2);
       dst.light2.set(src.light2);
+      dst.settle.set(src.settle);
+      dst.settleGoal.set(src.settleGoal);
       dst.amb.set(src.amb);
       dst.light.set(src.light);
       dst.lightPos.set(src.lightPos);
@@ -695,6 +871,9 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       const altLight = amb.light ?? { colour: sc.light, share: 0 };
       state.light2.set(rgb(PALETTE[altLight.colour]));
       state.amb.set([altBg.share, altFg.share, altLight.share]);
+      // A new answer clears anything the user settled by hand.
+      state.settle.fill(0);
+      state.settleGoal.fill(0);
       state.light.set(rgb(PALETTE[sc.light]));
       state.lightPos.set(lightPosition(sc.lightPos, sc.horizon));
       state.glow = lightStrength(sc.lightPos, sc.glow);
@@ -743,14 +922,27 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       phase = "handoff";
     }
 
-    function ambiguityLine(amb) {
+    // What Jev was unsure about, and which of it the user has since settled.
+    let shownAmbiguity = null;
+    let shownScene = null;
+    const userSettled = new Set();
+
+    function ambiguityLine(amb, settledRoles = userSettled) {
       const parts = Object.entries(amb ?? {})
-        .filter(([, a]) => a.share > 0)
-        .map(([role, a]) => `${role} ↔ ${a.colour} ${(a.share * 100).toFixed(0)}%`);
-      return parts.length ? parts.join(", ") : "settled";
+        .filter(([role, a]) => a.share > 0 || settledRoles.has(role))
+        .map(([role, a]) => (settledRoles.has(role) ? `${role} settled by you` : `${role} ↔ ${a.colour} ${(a.share * 100).toFixed(0)}%`));
+      return parts.length ? parts.join(", ") : "Jev is sure";
+    }
+
+    function renderAmbiguityLine() {
+      hudEl.textContent = hudEl.textContent.replace(/^unsure .*$/m, `unsure   ${ambiguityLine(shownAmbiguity)}`);
     }
 
     function setTarget(data) {
+      shownAmbiguity = data.scene.ambiguity;
+      shownScene = data.scene;
+      userSettled.clear();
+      closePicker(); // it was about the previous answer
       const topForm = FORMS.reduce((a, b) => (data.form[a] >= data.form[b] ? a : b));
       const topOf = (probs) => Object.entries(probs).reduce((a, b) => (b[1] > a[1] ? b : a));
       const sc = data.scene;
@@ -776,6 +968,127 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
 
     let shader = null;
     try { shader = createShader(); } catch (err) { console.error(err); }
+
+    // ------------------------------------------------------------------
+    // Settling a split vote by touch
+    // ------------------------------------------------------------------
+    // Tapping the canvas picks whichever colour is under the finger: a rival
+    // patch takes over its whole region, or the winner absorbs the patches.
+    // The pick happens in the frame loop so it reads the frame being shown.
+    const SETTLE_SECONDS = 0.8;
+    let pendingPick = null;
+
+    function settleAt(state, x, y) {
+      if (!shader || !document.body.classList.contains("shader")) return;
+      const sample = shader.pick(state, clock, x, y);
+      if (!sample) return;
+      const decision = decideSettle(sample, {
+        share: [state.amb[0], state.amb[1]],
+        settled: [state.settleGoal[0] > 0, state.settleGoal[1] > 0],
+      });
+      if (decision.action === "sure") return openPicker(decision, x, y);
+      if (decision.action === "done") return flash(`you already settled the ${decision.name}`);
+      state.settle[decision.role * 2 + 1] = decision.to;
+      state.settleGoal[decision.role] = 1;
+      userSettled.add(decision.name);
+      renderAmbiguityLine();
+    }
+
+    // ------------------------------------------------------------------
+    // Swatch picker
+    // ------------------------------------------------------------------
+    // Jev was sure of this colour and you disagree. The picker offers Jev's
+    // other ideas first, then the palette's nearest neighbours. Choosing one
+    // reuses the settle machinery: the "runner-up" slot takes that colour and
+    // the region eases over to it.
+    let pickerRole = null;
+
+    function closePicker() {
+      pickerEl.classList.remove("on");
+      pickerRole = null;
+    }
+
+    function openPicker(decision, x, y) {
+      const winner = shownScene[decision.name];
+      const names = pickerOptions({
+        winner,
+        jev: shownAmbiguity?.[decision.name]?.options ?? [],
+        palette: PALETTE,
+        count: 8,
+      });
+      const cap = document.createElement("div");
+      cap.className = "cap";
+      cap.textContent = `${decision.name} · Jev is sure. Pick another?`;
+      const row = document.createElement("div");
+      row.className = "row";
+      for (const name of names) {
+        const sw = document.createElement("button");
+        sw.type = "button";
+        sw.className = name === winner ? "sw cur" : "sw";
+        sw.style.backgroundColor = PALETTE[name];
+        sw.title = name;
+        sw.setAttribute("aria-label", name === winner ? `${name} (current)` : name);
+        sw.addEventListener("click", () => applyPicked(name));
+        row.appendChild(sw);
+      }
+      pickerEl.replaceChildren(cap, row);
+      pickerRole = decision;
+      pickerEl.classList.add("on");
+
+      // Above the finger when there is room, clamped inside the screen.
+      const vv = window.visualViewport;
+      const vw = vv?.width ?? innerWidth;
+      const box = pickerEl.getBoundingClientRect();
+      const left = Math.min(Math.max(x - box.width / 2, 8), vw - box.width - 8);
+      const above = y - box.height - 16;
+      const top = above >= 8 ? above : y + 16;
+      pickerEl.style.left = `${left}px`;
+      pickerEl.style.top = `${top}px`;
+      pickerEl.style.transformOrigin = `${x - left}px ${above >= 8 ? "100%" : "0%"}`;
+    }
+
+    function applyPicked(name) {
+      if (!pickerRole) return;
+      const { role, name: roleName } = pickerRole;
+      const state = phase === "idle" || phase === "arrive" ? current : next;
+      const winner = shownScene[roleName];
+      if (name === winner) {
+        state.settle[role * 2 + 1] = 0;
+      } else {
+        // While the opening answer eases in, `current` chases `target` every
+        // frame, so the colour has to land on both or it drifts back.
+        const key = role === 0 ? "bg2" : "fg2";
+        for (const s of state === current ? [current, target] : [state]) s[key].set(rgb(PALETTE[name]));
+        state.settle[role * 2 + 1] = 1;
+      }
+      state.settleGoal[role] = 1;
+      userSettled.add(roleName);
+      renderAmbiguityLine();
+      closePicker();
+    }
+
+    // A tap that changes nothing still answers, briefly, under the text field.
+    let flashTimer;
+    function flash(message) {
+      clearTimeout(flashTimer);
+      statusEl.textContent = message;
+      statusEl.classList.add("on");
+      flashTimer = setTimeout(() => statusEl.classList.remove("on"), 1800);
+    }
+
+    const canvasEl = document.getElementById("gl");
+    // Debug aid, like window.__scene: what would a tap here decide?
+    window.__pick = (x, y) => {
+      const st = phase === "idle" || phase === "arrive" ? current : next;
+      return shader?.pick(st, clock, x, y) ?? null;
+    };
+    canvasEl.addEventListener("pointerdown", (e) => {
+      // While the text field has focus, this tap only puts the caret away
+      // (the document-level handler does that). It must not also settle a
+      // vote or pop the picker open. The next tap does.
+      if (document.activeElement === input) return;
+      pendingPick = { x: e.clientX, y: e.clientY };
+    });
 
     let last = performance.now();
     let clock = 0;
@@ -815,6 +1128,17 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
 
         // Accumulate time at the current speed so speed changes never jump.
         clock += dt * (0.03 + 0.5 * Math.pow(energy, 1.5));
+
+        // The scene the viewer is looking at, for settling votes by touch.
+        const visible = phase === "idle" || phase === "arrive" ? current : next;
+        for (let role = 0; role < 2; role++) {
+          const i = role * 2;
+          visible.settle[i] = Math.min(visible.settleGoal[role], visible.settle[i] + dt / SETTLE_SECONDS);
+        }
+        if (pendingPick) {
+          settleAt(visible, pendingPick.x, pendingPick.y);
+          pendingPick = null;
+        }
         if (phase === "idle" || phase === "arrive") shader.draw(current, current, 1, false, clock);
         else shader.draw(held, next, mix, heldIsTex, clock);
       }
@@ -833,7 +1157,6 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
     }
     toggleEl.addEventListener("click", () => {
       setMode(document.body.classList.contains("shader") ? "stripes" : "shader");
-      input.focus();
     });
     let saved = null;
     try { saved = localStorage.getItem("mode"); } catch {}
@@ -852,19 +1175,24 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
     let pendingText = null;
 
     async function query(text) {
-      if (!text.trim()) return;
+      if (!text.trim()) {
+        if (!inFlight) fieldEl.classList.remove("thinking");
+        return;
+      }
       if (inFlight) {
         pendingText = text;
         return;
       }
       inFlight = true;
-      statusEl.classList.add("on");
+      fieldEl.classList.add("thinking");
       try {
         const res = await fetch(`/api/palette?q=${encodeURIComponent(text)}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? res.status);
         // Apply even if the field has moved on: an intermediate picture is the point.
         renderStripes(data.colors);
+        renderLine(data.colors);
+        paintField(data);
         setTarget(data);
       } catch (err) {
         console.error(err);
@@ -873,7 +1201,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         const waiting = pendingText;
         pendingText = null;
         if (waiting && waiting !== text) query(waiting);
-        else if (input.value === text) statusEl.classList.remove("on");
+        else fieldEl.classList.remove("thinking");
       }
     }
 
@@ -882,7 +1210,87 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       timer = setTimeout(() => query(input.value), 150);
     });
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { clearTimeout(timer); query(input.value); }
+      if (e.key === "Enter") {
+        clearTimeout(timer);
+        query(input.value);
+        // On a phone, Enter means done: put the keyboard away.
+        if (matchMedia("(pointer: coarse)").matches) input.blur();
+      }
+    });
+
+    // ------------------------------------------------------------------
+    // The search bar
+    // ------------------------------------------------------------------
+    // The bar takes its cues from the picture: the caret and the glow use the
+    // dominant colour, and the underline's edges soften as
+    // Jev's confidence drops.
+    const luminance = (hex) => {
+      const [r, g, b] = rgb(hex);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+
+    // The dominant colour, lifted when it is too dark (navy, charcoal) to
+    // show on the glass, so a red word keeps a red caret.
+    function accentOf(colors) {
+      const lead = colors[0];
+      const l = luminance(lead.hex);
+      if (l >= 0.55) return lead.hex;
+      const t = (0.55 - l) / (1 - l);
+      const lifted = rgb(lead.hex).map((c) => Math.round((c + (1 - c) * t) * 255));
+      return `rgb(${lifted.join(",")})`;
+    }
+
+    function paintField(data) {
+      document.documentElement.style.setProperty("--accent", accentOf(data.colors));
+      fieldEl.style.setProperty("--bleed", `${(1.1 - 0.9 * data.confidence).toFixed(2)}px`);
+    }
+
+    // Ideas for what to type, one at a time, only while the field is empty.
+    const HINTS = [
+      "a place, a feeling, a word",
+      "burnt toast at 3am",
+      "the last day of summer",
+      "static on an old tv",
+      "a room you miss",
+      "thunder before rain",
+    ];
+    let hintIndex = 0;
+    const showHint = () => {
+      hintEl.textContent = HINTS[hintIndex % HINTS.length];
+      hintEl.classList.add("on");
+    };
+    setInterval(() => {
+      if (input.value) return;
+      hintEl.classList.remove("on");
+      setTimeout(() => {
+        hintIndex++;
+        showHint();
+      }, 750);
+    }, 4200);
+    showHint();
+
+    // Focus follows intent. Clicking or tapping anywhere outside the bar
+    // (and the picker) puts the caret away; typing anywhere brings it back
+    // with the old word selected, ready to be replaced.
+    document.addEventListener("pointerdown", (e) => {
+      if (!pickerEl.contains(e.target)) closePicker();
+      if (!e.target.closest(".field, .picker, .toggle")) input.blur();
+    });
+    fieldEl.addEventListener("pointerdown", (e) => {
+      if (e.target === input) return;
+      e.preventDefault();
+      input.focus();
+    });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        if (pickerEl.classList.contains("on")) closePicker();
+        else input.blur();
+        return;
+      }
+      const idle = !document.activeElement || document.activeElement === document.body;
+      if (!idle || e.metaKey || e.ctrlKey || e.altKey || e.key.length !== 1) return;
+      input.focus();
+      input.select();
     });
 
     // A phone keyboard would cover the picture if the field took focus on load.
