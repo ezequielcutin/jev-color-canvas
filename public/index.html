@@ -306,6 +306,7 @@
     import { horizonY, lightPosition, lightStrength, compositionVector } from "/scene-uniforms.mjs";
     import { decideSettle } from "/settle.mjs";
     import { pickerOptions } from "/swatches.mjs";
+    import { createGovernor } from "/governor.mjs";
 
     // Keep the picture inside the area that is actually visible. On a phone
     // that is the space above the keyboard and below the browser chrome.
@@ -763,10 +764,22 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       let texW = 0;
       let texH = 0;
 
+      // The canvas backing store is separate from its on-screen size (the
+      // browser upscales it), so it can be smaller than the screen. The
+      // governor picks `scale` from measured frame times; MAX_PIXELS covers a
+      // huge display before it has seen a single frame.
+      const MAX_PIXELS = 3.0e6;
+      let scale = 1;
+
       function resize() {
-        const dpr = Math.min(devicePixelRatio || 1, 1.5);
-        const w = Math.round(canvas.clientWidth * dpr);
-        const h = Math.round(canvas.clientHeight * dpr);
+        const dpr = Math.min(devicePixelRatio || 1, 1.5) * scale;
+        let w = Math.round(canvas.clientWidth * dpr);
+        let h = Math.round(canvas.clientHeight * dpr);
+        if (w * h > MAX_PIXELS) {
+          const k = Math.sqrt(MAX_PIXELS / (w * h));
+          w = Math.round(w * k);
+          h = Math.round(h * k);
+        }
         if (canvas.width !== w || canvas.height !== h) {
           canvas.width = w;
           canvas.height = h;
@@ -806,6 +819,12 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       }
 
       return {
+        setScale(next) {
+          scale = next;
+        },
+        pixels() {
+          return canvas.width * canvas.height;
+        },
         // Freeze the picture currently on screen so a new answer can cover it.
         snapshot() {
           resize();
@@ -1016,7 +1035,8 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
         `light    ${sc.light} @ ${lightAt}  glow ${sc.glow.toFixed(2)}\n` +
         `unsure   ${ambiguityLine(sc.ambiguity)}\n` +
         `conf     ${data.confidence.toFixed(2)}\n` +
-        `jev      ${data.ms}ms`;
+        `jev      ${data.ms}ms\n` +
+        `render   ${perfText}`;
 
       if (phase === "idle") {
         applyAnswer(target, data);
@@ -1150,11 +1170,37 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       pendingPick = { x: e.clientX, y: e.clientY };
     });
 
+    // ------------------------------------------------------------------
+    // Adaptive resolution
+    // ------------------------------------------------------------------
+    // Frame times feed a governor that picks the render scale. Dissolves are
+    // not measured (they paint more and resizing mid-dissolve would pop), and
+    // neither is a hidden tab.
+    const governor = createGovernor();
+    let perfText = "measuring…";
+    let fpsEma = 0;
+    let lastPerfPaint = 0;
+
+    function renderPerfLine(now) {
+      if (now - lastPerfPaint < 500) return;
+      lastPerfPaint = now;
+      const mp = shader ? shader.pixels() / 1e6 : 0;
+      perfText = `${fpsEma.toFixed(0)}fps  ${governor.scale.toFixed(2)}x  ${mp.toFixed(1)}MP`;
+      hudEl.textContent = hudEl.textContent.replace(/^render .*$/m, `render   ${perfText}`);
+    }
+    window.__perf = () => ({ fps: fpsEma, scale: governor.scale, megapixels: shader ? shader.pixels() / 1e6 : 0 });
+
     let last = performance.now();
     let clock = 0;
     function frame(now) {
-      const dt = Math.min((now - last) / 1000, 0.1);
+      const rawMs = now - last;
+      const dt = Math.min(rawMs / 1000, 0.1);
       last = now;
+      if (shader && document.body.classList.contains("shader") && document.visibilityState === "visible") {
+        if (rawMs > 0 && rawMs < 1000) fpsEma = fpsEma ? fpsEma + (1000 / rawMs - fpsEma) * 0.08 : 1000 / rawMs;
+        if (phase !== "handoff") shader.setScale(governor.push(rawMs, now));
+        renderPerfLine(now);
+      }
       if (phase === "handoff") {
         mix = Math.min(1, mix + dt / handoffDur);
         if (mix >= 1) {
