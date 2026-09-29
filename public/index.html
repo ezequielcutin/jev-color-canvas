@@ -284,13 +284,88 @@
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
     }
+
+    /* Phone typing. The system keyboard stays (a page can't replace it).
+       The same field drops down to sit on that keyboard, with phrases to try. */
+    .tray {
+      display: flex;
+      gap: 18px;
+      min-width: 0;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      padding: 2px 0 0;
+      mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 28px), transparent);
+    }
+    .tray::-webkit-scrollbar { display: none; }
+    .tray[hidden] { display: none; }
+    .tray button {
+      flex: none;
+      border: 0;
+      background: none;
+      color: inherit;
+      font: inherit;
+      font-size: 14px;
+      line-height: 1.2;
+      padding: 10px 0;
+      min-height: 44px;
+      white-space: nowrap;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .tray button:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+
+    body.keyboard .top,
+    html.short body.keyboard .top,
+    body.shader.keyboard .top {
+      inset: auto 0 0 0;
+      height: auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      align-items: center;
+      padding:
+        0
+        max(16px, env(safe-area-inset-right))
+        max(12px, env(safe-area-inset-bottom))
+        max(16px, env(safe-area-inset-left));
+    }
+    body.keyboard .field {
+      width: 100%;
+      max-width: 640px;
+      min-width: 0;
+    }
+    /* Stripes has no glass of its own. Give the dock a surface so the word
+       stays readable once it sits on the colour bands. */
+    body.keyboard:not(.shader) .field {
+      background: #fff;
+      border-radius: 18px;
+      padding: 8px 20px 14px;
+    }
+    body.keyboard .hint { display: none; }
+    body.keyboard input {
+      font-size: 22px;
+      text-align: center;
+      padding: 6px 0 2px;
+    }
+    body.keyboard input::placeholder {
+      font-size: 16px;
+      color: color-mix(in srgb, currentColor 80%, transparent);
+    }
+    body.keyboard .status {
+      top: auto;
+      right: 0;
+      bottom: calc(100% + 10px);
+    }
+    body.shader.keyboard .hud { display: none; }
   </style>
 </head>
 <body>
   <canvas id="gl"></canvas>
   <div class="top">
     <div class="field" id="field">
-      <input id="q" value="tomato" placeholder=" " aria-label="Type a word" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" />
+      <div class="tray" id="tray" role="group" aria-label="Try a phrase" hidden></div>
+      <input id="q" value="tomato" placeholder=" " aria-label="Type a word" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" inputmode="text" />
       <div class="hint" id="hint" aria-hidden="true"></div>
       <div class="line" id="line" aria-hidden="true"></div>
       <div class="status" id="status" role="status"></div>
@@ -332,6 +407,7 @@
     const fieldEl = document.getElementById("field");
     const lineEl = document.getElementById("line");
     const hintEl = document.getElementById("hint");
+    const trayEl = document.getElementById("tray");
     const pickerEl = document.getElementById("picker");
     const hudEl = document.getElementById("hud");
     const toggleEl = document.getElementById("toggle");
@@ -1360,6 +1436,45 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       "a room you miss",
       "thunder before rain",
     ];
+
+    // Phrases sit on the keyboard while typing. Tapping one replaces the word
+    // and puts the keyboard away so the picture can fill the screen.
+    let phraseAt = 0;
+    function usePhrase(phrase) {
+      const now = performance.now();
+      if (now - phraseAt < 400) return;
+      phraseAt = now;
+      input.value = phrase;
+      clearTimeout(timer);
+      query(phrase);
+      input.blur();
+    }
+    for (const phrase of HINTS.slice(1)) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = phrase;
+      btn.addEventListener("pointerdown", (e) => e.preventDefault());
+      btn.addEventListener("pointerup", (e) => {
+        e.preventDefault();
+        usePhrase(phrase);
+      });
+      btn.addEventListener("click", () => usePhrase(phrase));
+      trayEl.appendChild(btn);
+    }
+
+    // A page cannot replace the system keyboard. On a phone, focusing the
+    // field means that keyboard is up, so the word docks to it.
+    function syncKeyboard() {
+      const open =
+        document.activeElement === input &&
+        matchMedia("(hover: none) and (pointer: coarse)").matches;
+      document.body.classList.toggle("keyboard", open);
+      trayEl.hidden = !open;
+      input.placeholder = open ? HINTS[0] : " ";
+    }
+    input.addEventListener("focus", syncKeyboard);
+    input.addEventListener("blur", syncKeyboard);
+    matchMedia("(hover: none) and (pointer: coarse)").addEventListener("change", syncKeyboard);
     let hintIndex = 0;
     const showHint = () => {
       hintEl.textContent = HINTS[hintIndex % HINTS.length];
@@ -1383,7 +1498,7 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       if (!e.target.closest(".field, .picker, .toggle")) input.blur();
     });
     fieldEl.addEventListener("pointerdown", (e) => {
-      if (e.target === input) return;
+      if (e.target === input || e.target.closest(".tray")) return;
       e.preventDefault();
       input.focus();
     });
