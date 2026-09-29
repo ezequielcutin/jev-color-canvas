@@ -22,19 +22,17 @@
     * { box-sizing: border-box; margin: 0; }
     html {
       height: 100%;
-      min-height: 100lvh;
       background: #fff;
       overflow: hidden;
       -webkit-text-size-adjust: 100%;
     }
-    /* Shader mode has no white page. A white root is what Safari's glass
-       bars sample wherever the picture does not reach. */
-    html:has(body.shader) { background: #000; }
+    /* Fallback behind Safari's glass and the overscroll rubber-band.
+       The picture itself has to scroll under the bars; a fixed layer never does. */
+    html:has(body.shader),
+    body.shader { background: #000; }
     body {
-      position: fixed;
-      inset: 0;
-      width: 100%;
-      height: 100lvh;
+      position: relative;
+      height: 100%;
       background: #fff;
       color: #000;
       font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -42,7 +40,10 @@
       touch-action: manipulation;
       overscroll-behavior: none;
     }
-    body.shader { background: #000; }
+    .band {
+      position: absolute;
+      inset: 0;
+    }
 
     /* ---- shared input ---- */
     .top {
@@ -161,11 +162,11 @@
 
     /* ---- stripes mode (the original replica) ---- */
     .stripes {
-      position: fixed;
+      position: absolute;
       left: 0;
-      width: 100%;
-      top: 50lvh;
-      height: 50lvh;
+      right: 0;
+      top: 50%;
+      height: 50%;
       display: flex;
       overflow: hidden;
     }
@@ -176,47 +177,44 @@
     }
 
     /* ---- shader mode ---- */
-    /* The picture fills the large viewport, so it runs under Safari's glass
-       bars instead of stopping at them. Controls live in .screen, which is
-       only the area that is actually visible. */
+    /* On a phone the picture is a tall scrolling band, parked so it continues
+       under Safari's glass. Fixed layers are clipped to the gap between the
+       bars, which is why those bars were a flat colour. */
     canvas {
-      position: fixed;
-      left: 0;
-      top: 0;
+      position: absolute;
+      inset: 0;
       width: 100%;
-      height: 100lvh;
+      height: 100%;
       display: none;
     }
-    html.occluded canvas {
-      top: var(--vv-top, 0px);
-      left: var(--vv-left, 0px);
-      width: var(--vv-width, 100%);
-      height: var(--vv-height, 100dvh);
-    }
-    html.occluded .stripes {
-      top: calc(var(--vv-top, 0px) + var(--vv-height, 100dvh) / 2);
-      height: calc(var(--vv-height, 100dvh) / 2);
-    }
     .screen {
-      position: fixed;
-      top: var(--vv-top, 0px);
-      left: var(--vv-left, 0px);
-      width: var(--vv-width, 100%);
-      height: var(--vv-height, 100dvh);
+      position: absolute;
+      inset: 0;
       z-index: 2;
       pointer-events: none;
     }
     .screen .toggle,
     .screen .hud,
     .screen .field { pointer-events: auto; }
-    .lvh-probe {
-      position: fixed;
-      top: 0;
-      width: 0;
-      height: 100lvh;
-      pointer-events: none;
-      visibility: hidden;
+    html.bleed {
+      height: auto;
+      overflow-x: hidden;
+      overflow-y: scroll;
+      overscroll-behavior: none;
     }
+    html.bleed body {
+      height: auto;
+      overflow: visible;
+    }
+    html.bleed .band {
+      position: relative;
+      inset: auto;
+      width: 100%;
+      touch-action: none;
+    }
+    html.bleed .screen { inset: auto; left: 0; width: 100%; }
+    html.bleed .field { touch-action: manipulation; }
+    html.bleed .tray { touch-action: pan-x; }
     body.shader canvas { display: block; }
     body.shader .stripes { display: none; }
     body.shader .top { inset: 0 0 auto 0; height: 38%; color: #fff; }
@@ -409,7 +407,7 @@
   </style>
 </head>
 <body class="shader">
-  <div class="lvh-probe" id="lvh-probe"></div>
+  <div class="band" id="band">
   <canvas id="gl"></canvas>
   <div class="stripes" id="stripes"></div>
   <div class="screen">
@@ -425,6 +423,7 @@
   <div class="hud" id="hud"></div>
   <button class="toggle" id="toggle"></button>
   </div>
+  </div>
   <div class="picker" id="picker" role="group" aria-label="Choose a colour"></div>
 
   <script type="module">
@@ -434,27 +433,80 @@
     import { pickerOptions } from "/swatches.mjs";
     import { createGovernor } from "/governor.mjs";
 
-    // Controls follow the visible viewport (above the keyboard, clear of the
-    // notch). The picture stays on the large viewport so it runs under
-    // Safari's glass bars, and only shrinks when a keyboard covers the bottom.
-    function fitVisible() {
+    // Safari's glass only blurs document pixels that scroll underneath it.
+    // On a phone the picture is taller than the screen and held at a fixed
+    // scroll, so the bars have picture behind them. Controls sit in the
+    // visible slice of that band.
+    const BLEED_PAD = 200;
+    let bleedScroll = 0;
+
+    function glassChrome() {
+      return matchMedia("(hover: none) and (pointer: coarse)").matches;
+    }
+
+    function layoutBleed() {
+      const band = document.getElementById("band");
+      const screen = document.querySelector(".screen");
+      const root = document.documentElement;
       const vv = window.visualViewport;
-      if (!vv) return;
-      const s = document.documentElement.style;
-      s.setProperty("--vv-top", `${vv.offsetTop}px`);
-      s.setProperty("--vv-left", `${vv.offsetLeft}px`);
-      s.setProperty("--vv-width", `${vv.width}px`);
-      s.setProperty("--vv-height", `${vv.height}px`);
-      document.documentElement.classList.toggle("short", vv.height <= 560);
-      const full = document.getElementById("lvh-probe").getBoundingClientRect().height;
-      const coveredBelow = full - vv.offsetTop - vv.height;
-      document.documentElement.classList.toggle("occluded", coveredBelow > 180);
+      if (vv) {
+        root.style.setProperty("--vv-top", `${vv.offsetTop}px`);
+        root.style.setProperty("--vv-left", `${vv.offsetLeft}px`);
+        root.style.setProperty("--vv-width", `${vv.width}px`);
+        root.style.setProperty("--vv-height", `${vv.height}px`);
+        root.classList.toggle("short", vv.height <= 560);
+      }
+      if (!glassChrome()) {
+        root.classList.remove("bleed");
+        band.style.height = "";
+        screen.style.top = "";
+        screen.style.height = "";
+        return;
+      }
+      root.classList.add("bleed");
+      const full = window.innerHeight;
+      const top = vv ? vv.offsetTop : 0;
+      const height = vv ? vv.height : full;
+      band.style.height = `${full + BLEED_PAD * 2}px`;
+      screen.style.top = `${BLEED_PAD + top}px`;
+      screen.style.height = `${height}px`;
+      bleedScroll = BLEED_PAD;
     }
+
+    function settleBleed() {
+      if (!document.documentElement.classList.contains("bleed")) return;
+      window.scrollTo(0, bleedScroll);
+    }
+
+    // A one-pixel jiggle makes Safari resample the bars. Repainting the
+    // canvas alone leaves the glass on an old snapshot.
+    function nudgeBars() {
+      if (!document.documentElement.classList.contains("bleed")) return;
+      window.scrollTo(0, bleedScroll + 1);
+      requestAnimationFrame(() => window.scrollTo(0, bleedScroll));
+    }
+
+    function fitVisible() {
+      layoutBleed();
+      if (document.activeElement?.id !== "q") settleBleed();
+    }
+    window.addEventListener("resize", fitVisible);
+    window.addEventListener("orientationchange", fitVisible);
     if (window.visualViewport) {
-      visualViewport.addEventListener("resize", fitVisible);
+      visualViewport.addEventListener("resize", () => {
+        layoutBleed();
+        settleBleed();
+        nudgeBars();
+      });
       visualViewport.addEventListener("scroll", fitVisible);
-      fitVisible();
     }
+    window.addEventListener("scroll", () => {
+      if (!document.documentElement.classList.contains("bleed")) return;
+      if (document.activeElement?.id === "q") return;
+      if (Math.abs(window.scrollY - bleedScroll) > 1) settleBleed();
+    }, { passive: true });
+    layoutBleed();
+    settleBleed();
 
     const input = document.getElementById("q");
     const stripesEl = document.getElementById("stripes");
@@ -1172,9 +1224,10 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       if (phase === "idle") {
         applyAnswer(target, data);
         phase = "arrive";
-        return;
+      } else {
+        beginHandoff(data);
       }
-      beginHandoff(data);
+      nudgeBars();
     }
 
     let shader = null;
@@ -1528,7 +1581,11 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       input.placeholder = open ? HINTS[0] : " ";
     }
     input.addEventListener("focus", syncKeyboard);
-    input.addEventListener("blur", syncKeyboard);
+    input.addEventListener("blur", () => {
+      syncKeyboard();
+      settleBleed();
+      nudgeBars();
+    });
     matchMedia("(hover: none) and (pointer: coarse)").addEventListener("change", syncKeyboard);
     let hintIndex = 0;
     const showHint = () => {
