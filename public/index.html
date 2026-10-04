@@ -1412,6 +1412,9 @@ void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
       return shader?.pick(st, clock, x, y) ?? null;
     };
     canvasEl.addEventListener("pointerdown", (e) => {
+      // On a phone, a tap is for the picture and the keyboard. Choosing a
+      // foreground or background stays a pointer with a cursor.
+      if (matchMedia("(hover: none) and (pointer: coarse)").matches) return;
       // While the text field has focus, this tap only puts the caret away
       // (the document-level handler does that). It must not also settle a
       // vote or pop the picker open. The next tap does.
